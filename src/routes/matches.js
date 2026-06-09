@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
-import { gameOrThrow, shouldAutoFinish, computeWinner } from '../lib/games.js';
+import { gameOrThrow, shouldAutoFinish, computeWinner, RPS_PICKS, rpsBeats } from '../lib/games.js';
 import { generateCode } from '../lib/code.js';
 
 const router = Router();
@@ -11,9 +11,18 @@ const router = Router();
 const PUBLIC_USER = { select: { id: true, pseudo: true, avatarUrl: true, createdAt: true } };
 const MATCH_INCLUDE = { player1: PUBLIC_USER, player2: PUBLIC_USER };
 
+// Optional shifumi block — quand présent, déclenche le flow "result-first".
+const shifumiBlock = z.object({
+  winnerPseudo: z.string().trim().min(1).max(24),
+  winnerPick: z.enum(RPS_PICKS),
+  loserPick: z.enum(RPS_PICKS),
+});
+
 const createBody = z.object({
   game: z.string().min(1),
   opponentPseudo: z.string().trim().min(1).max(24).optional().nullable(),
+  // Réservé au game="shifumi" — duel en 1 manche, on enregistre le résultat directement.
+  shifumi: shifumiBlock.optional(),
 });
 
 const joinBody = z.object({
@@ -26,11 +35,17 @@ const scoreBody = z.object({
   source: z.enum(['extension', 'web', 'manual']),
 });
 
-// POST /matches — crée un match. Avec opponentPseudo existant → status active.
-// Sinon → pending + code unique généré.
+// POST /matches — crée un match.
+// Cas particulier shifumi : si game="shifumi" + bloc "shifumi" + opponentPseudo, on enregistre
+// le résultat directement (match créé déjà status=finished, score 1-0, metadata = picks).
 router.post('/', requireAuth, async (req, res) => {
   const body = createBody.parse(req.body);
   const g = gameOrThrow(body.game);
+
+  if (body.game === 'shifumi') {
+    return createShifumi(req, res, body);
+  }
+
   let opponent = null;
   if (body.opponentPseudo) {
     opponent = await prisma.user.findUnique({ where: { pseudo: body.opponentPseudo } });
@@ -56,12 +71,58 @@ router.post('/', requireAuth, async (req, res) => {
       });
       break;
     } catch (e) {
-      if (e?.code !== 'P2002') throw e; // autre erreur que collision code → on remonte
+      if (e?.code !== 'P2002') throw e;
     }
   }
   if (!match) throw new HttpError(500, 'code_generation_failed', 'internal_error');
   res.status(201).json(toPublic(match, g));
 });
+
+async function createShifumi(req, res, body) {
+  if (!body.shifumi) throw new HttpError(400, 'shifumi_block_required', 'bad_request');
+  if (!body.opponentPseudo) throw new HttpError(400, 'opponent_required_for_shifumi', 'bad_request');
+  const { winnerPseudo, winnerPick, loserPick } = body.shifumi;
+
+  if (!rpsBeats(winnerPick, loserPick)) {
+    // winnerPick ne bat pas loserPick (égalité ou contre-sens)
+    throw new HttpError(400, 'invalid_shifumi_outcome', 'bad_request');
+  }
+
+  const opponent = await prisma.user.findUnique({ where: { pseudo: body.opponentPseudo } });
+  if (!opponent) throw new HttpError(404, 'opponent_not_found', 'not_found');
+  if (opponent.id === req.userId) throw new HttpError(400, 'cannot_play_self', 'bad_request');
+
+  // identifie le gagnant côté ids
+  const meWon = winnerPseudo === req.pseudo;
+  const opponentWon = winnerPseudo === opponent.pseudo;
+  if (!meWon && !opponentWon) {
+    throw new HttpError(400, 'winner_not_in_match', 'bad_request');
+  }
+  const winnerId = meWon ? req.userId : opponent.id;
+
+  const match = await prisma.match.create({
+    data: {
+      game: 'shifumi',
+      player1Id: req.userId,
+      player2Id: opponent.id,
+      status: 'finished',
+      finishedAt: new Date(),
+      scoreP1: meWon ? 1 : 0,
+      scoreP2: meWon ? 0 : 1,
+      winnerId,
+      source: 'manual',
+      metadata: {
+        // Persisté tel quel, le client se charge d'afficher
+        winnerPseudo: meWon ? req.pseudo : opponent.pseudo,
+        loserPseudo: meWon ? opponent.pseudo : req.pseudo,
+        winnerPick,
+        loserPick,
+      },
+    },
+    include: MATCH_INCLUDE,
+  });
+  res.status(201).json(toPublic(match));
+}
 
 // POST /matches/join — un second joueur rejoint via code, status → active
 router.post('/join', requireAuth, async (req, res) => {
@@ -150,7 +211,7 @@ router.get('/', requireAuth, async (req, res) => {
   res.json(list.map((m) => toPublic(m)));
 });
 
-// GET /matches/:id — pour polling du score live (côté clients)
+// GET /matches/:id
 router.get('/:id', requireAuth, async (req, res) => {
   const m = await prisma.match.findUnique({
     where: { id: req.params.id },
@@ -175,6 +236,7 @@ function toPublic(m) {
     scoreP1: m.scoreP1,
     scoreP2: m.scoreP2,
     source: m.source,
+    metadata: m.metadata ?? null,
     createdAt: m.createdAt,
     finishedAt: m.finishedAt,
     player1Id: m.player1Id,
