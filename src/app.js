@@ -5,6 +5,7 @@ import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import matchesRoutes from './routes/matches.js';
 import leaderboardRoutes from './routes/leaderboard.js';
+import friendsRoutes from './routes/friends.js';
 import { UPLOAD_ROOT, ensureAvatarsDir } from './lib/avatar-storage.js';
 
 export function buildApp() {
@@ -59,6 +60,7 @@ export function buildApp() {
   app.use('/me', wrapAsync(meRoutes));
   app.use('/matches', wrapAsync(matchesRoutes));
   app.use('/leaderboard', wrapAsync(leaderboardRoutes));
+  app.use('/friends', wrapAsync(friendsRoutes));
 
   app.use(notFound);
   app.use(errorHandler);
