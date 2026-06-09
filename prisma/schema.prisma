@@ -22,6 +22,11 @@ enum MatchSource {
   manual
 }
 
+enum FriendStatus {
+  pending
+  accepted
+}
+
 model User {
   id           String   @id @default(cuid())
   pseudo       String   @unique
@@ -32,6 +37,9 @@ model User {
   matchesAsP1 Match[] @relation("MatchP1")
   matchesAsP2 Match[] @relation("MatchP2")
   wonMatches  Match[] @relation("MatchWinner")
+
+  sentFriendRequests     Friendship[] @relation("FriendRequester")
+  receivedFriendRequests Friendship[] @relation("FriendAddressee")
 }
 
 model Match {
@@ -42,7 +50,8 @@ model Match {
   scoreP1    Int         @default(0)
   scoreP2    Int         @default(0)
   source     MatchSource?
-  // Champ libre par jeu — pour le shifumi : { winnerPick, loserPick }.
+  // Champ libre par jeu — pour le shifumi IRL : { winnerPick, loserPick, ... }.
+  // Pour le shifumi REMOTE : { mode:'remote', creatorPick, opponentPick?, winnerPseudo?, ... }
   metadata   Json?
   createdAt  DateTime    @default(now())
   finishedAt DateTime?
@@ -60,4 +69,20 @@ model Match {
   @@index([game])
   @@index([player1Id])
   @@index([player2Id])
+}
+
+// Demande/relation d'amitié. Une seule ligne par couple (requester, addressee).
+// Refus = suppression. Pas de "blocage" pour rester simple.
+model Friendship {
+  id          String       @id @default(cuid())
+  requesterId String
+  requester   User         @relation("FriendRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  addresseeId String
+  addressee   User         @relation("FriendAddressee", fields: [addresseeId], references: [id], onDelete: Cascade)
+  status      FriendStatus @default(pending)
+  createdAt   DateTime     @default(now())
+  acceptedAt  DateTime?
+
+  @@unique([requesterId, addresseeId])
+  @@index([addresseeId, status])
 }
