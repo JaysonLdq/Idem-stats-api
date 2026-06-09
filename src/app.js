@@ -4,6 +4,7 @@ import { errorHandler, notFound } from './middleware/error.js';
 import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import matchesRoutes from './routes/matches.js';
+import leaderboardRoutes from './routes/leaderboard.js';
 
 export function buildApp() {
   const app = express();
@@ -34,6 +35,7 @@ export function buildApp() {
   app.use('/auth', wrapAsync(authRoutes));
   app.use('/me', wrapAsync(meRoutes));
   app.use('/matches', wrapAsync(matchesRoutes));
+  app.use('/leaderboard', wrapAsync(leaderboardRoutes));
 
   app.use(notFound);
   app.use(errorHandler);
