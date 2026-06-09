@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import { errorHandler, notFound } from './middleware/error.js';
+import authRoutes from './routes/auth.js';
+import meRoutes from './routes/me.js';
 
 export function buildApp() {
   const app = express();
@@ -28,9 +30,27 @@ export function buildApp() {
     res.json({ ok: true, ts: Date.now() });
   });
 
-  // les autres routes seront branchées au fur et à mesure des features
+  app.use('/auth', wrapAsync(authRoutes));
+  app.use('/me', wrapAsync(meRoutes));
+
   app.use(notFound);
   app.use(errorHandler);
 
   return app;
 }
+
+// Bridge entre nos handlers async (await) et Express 4 (qui n'attrape pas les promesses rejetées par défaut).
+// On enveloppe le routeur pour relayer toute exception vers next().
+function wrapAsync(router) {
+  router.stack.forEach((layer) => {
+    if (!layer.route) return;
+    layer.route.stack.forEach((s) => {
+      if (s.handle.length !== 4) {
+        const fn = s.handle;
+        s.handle = (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+      }
+    });
+  });
+  return router;
+}
+
