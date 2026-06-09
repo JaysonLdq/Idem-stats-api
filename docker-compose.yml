@@ -1,52 +1,39 @@
-services:
+networks:
   traefik:
-    image: traefik:v3.1
-    command:
-      - --api.insecure=true
-      - --providers.docker=true
-      - --providers.docker.exposedByDefault=false
-      - --entrypoints.web.address=:80
-    ports:
-      - "80:80"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+    external: true
 
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: idem
-      POSTGRES_PASSWORD: idem
-      POSTGRES_DB: idem
+services:
+  next-nossl:
+    profiles: [ "nossl" ]
+    image: node:alpine
+    container_name: "${WEBSITE_NAME}"
+    restart: unless-stopped
     volumes:
-      - dbdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U idem"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  app:
-    build: .
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://idem:idem@db:5432/idem?schema=public
-      JWT_SECRET: ${JWT_SECRET:-change-me}
-      JWT_EXPIRES_IN: 30d
-      BCRYPT_ROUNDS: 10
-      PORT: 3000
-      NODE_ENV: production
-      CORS_ORIGINS: http://localhost:5173,chrome-extension://*
-    ports:
-      - "3000:3000"
-    command: sh -c "npx prisma migrate deploy && node src/server.js"
+      - .:/app
+    working_dir: /app/next
+    command: /bin/sh -c "npm install && npm run dev"
     labels:
-      - traefik.enable=true
-      - traefik.http.routers.idem.rule=Host(`${API_HOST:-api.idem.localhost}`)
-      - traefik.http.routers.idem.entrypoints=web
-      - traefik.http.services.idem.loadbalancer.server.port=3000
+      - "traefik.enable=true"
+      - "traefik.http.routers.${WEBSITE_NAME}.rule=Host(`${DOMAIN_WEBSITE}`)"
+      - "traefik.http.routers.${WEBSITE_NAME}.entrypoints=${ENTRYPOINT}"
+      - "traefik.http.services.${WEBSITE_NAME}.loadbalancer.server.port=3000"
+    networks:
+      - traefik
 
-volumes:
-  dbdata: {}
+  next:
+    profiles: [ "ssl" ]
+    image: node:alpine
+    container_name: "${WEBSITE_NAME}"
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    working_dir: /app/next
+    command: /bin/sh -c "npm install && npm run build && npm run start"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.${WEBSITE_NAME}.rule=Host(`${DOMAIN_WEBSITE}`)"
+      - "traefik.http.routers.${WEBSITE_NAME}.entrypoints=${ENTRYPOINT}"
+      - "traefik.http.services.${WEBSITE_NAME}.loadbalancer.server.port=3000"
+      - "traefik.http.routers.${WEBSITE_NAME}.tls.certresolver=myhttpchallenge"
+    networks:
+      - traefik
