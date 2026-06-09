@@ -7,11 +7,21 @@ Node 20 (ES modules), Express, Prisma + Postgres, Zod (validation), JWT + bcrypt
 
 ## Boot rapide
 
+Pré-requis : un Traefik tourne déjà sur le réseau Docker externe `traefik`
+(comme tu fais pour tes autres projets).
+
 ```bash
 cp .env.example .env
-docker compose up --build
-# API : http://localhost:3000 (ou http://api.idem.localhost via Traefik)
+
+# dev (HTTP, npm run dev avec watch)
+docker compose --profile nossl up
+
+# prod (HTTPS via myhttpchallenge)
+docker compose --profile ssl up -d
 ```
+
+L'API est routée par Traefik vers `http(s)://${DOMAIN_WEBSITE}`.
+Postgres reste sur un réseau interne (pas exposé).
 
 ## Endpoints
 
