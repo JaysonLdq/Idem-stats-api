@@ -1,0 +1,60 @@
+// idem-stats — schema Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MatchStatus {
+  pending
+  active
+  finished
+  cancelled
+}
+
+enum MatchSource {
+  extension
+  web
+  manual
+}
+
+model User {
+  id           String   @id @default(cuid())
+  pseudo       String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  matchesAsP1 Match[] @relation("MatchP1")
+  matchesAsP2 Match[] @relation("MatchP2")
+  wonMatches  Match[] @relation("MatchWinner")
+}
+
+model Match {
+  id         String      @id @default(cuid())
+  game       String
+  code       String?     @unique
+  status     MatchStatus @default(pending)
+  scoreP1    Int         @default(0)
+  scoreP2    Int         @default(0)
+  source     MatchSource?
+  createdAt  DateTime    @default(now())
+  finishedAt DateTime?
+
+  player1Id String
+  player1   User   @relation("MatchP1", fields: [player1Id], references: [id])
+
+  player2Id String?
+  player2   User?   @relation("MatchP2", fields: [player2Id], references: [id])
+
+  winnerId String?
+  winner   User?   @relation("MatchWinner", fields: [winnerId], references: [id])
+
+  @@index([status])
+  @@index([game])
+  @@index([player1Id])
+  @@index([player2Id])
+}
