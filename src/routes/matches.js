@@ -16,15 +16,20 @@ const MATCH_INCLUDE = { player1: PUBLIC_USER, player2: PUBLIC_USER };
 // REMOTE : le créateur commit son pick (caché), l'opponent commit le sien plus tard
 //          via POST /matches/:id/shifumi-pick. Au second pick, le serveur résout.
 
+// "condition" = enjeu posé en début de duel ("celui qui perd paye", "le gagnant choisit
+// le prochain bar"…). Optionnelle, ≤ 200 chars. Visible des deux côtés tout le temps.
+const shifumiCondition = z.string().trim().max(200).optional().nullable();
 const shifumiIrlBlock = z.object({
   mode: z.literal('irl').optional(), // défaut
   winnerPseudo: z.string().trim().min(1).max(24),
   winnerPick: z.enum(RPS_PICKS),
   loserPick: z.enum(RPS_PICKS),
+  condition: shifumiCondition,
 });
 const shifumiRemoteBlock = z.object({
   mode: z.literal('remote'),
   myPick: z.enum(RPS_PICKS),
+  condition: shifumiCondition,
 });
 const shifumiBlock = z.union([shifumiIrlBlock, shifumiRemoteBlock]);
 
@@ -144,7 +149,11 @@ async function createShifumi(req, res, body) {
         scoreP1: 0,
         scoreP2: 0,
         // creatorPick masqué côté opponent jusqu'à la résolution
-        metadata: { mode: 'remote', creatorPick: myPick },
+        metadata: {
+          mode: 'remote',
+          creatorPick: myPick,
+          ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
+        },
       },
       include: MATCH_INCLUDE,
     });
@@ -177,6 +186,7 @@ async function createShifumi(req, res, body) {
         loserPseudo: meWon ? opponent.pseudo : req.pseudo,
         winnerPick,
         loserPick,
+        ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
       },
     },
     include: MATCH_INCLUDE,
@@ -313,11 +323,22 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
 router.get('/', requireAuth, async (req, res) => {
   const scope = req.query.scope === 'all' ? 'all' : 'me';
   const game = typeof req.query.game === 'string' ? req.query.game : undefined;
+  const userPseudo = typeof req.query.userPseudo === 'string' ? req.query.userPseudo : undefined;
+
+  // userPseudo override scope=me : "donne-moi les matchs de N'IMPORTE QUEL joueur".
+  // Sert au front pour afficher l'historique d'autres profils.
+  let participantFilter = null;
+  if (userPseudo) {
+    const target = await prisma.user.findUnique({ where: { pseudo: userPseudo }, select: { id: true } });
+    if (!target) return res.json([]); // user inexistant → liste vide, pas 404
+    participantFilter = { OR: [{ player1Id: target.id }, { player2Id: target.id }] };
+  } else if (scope === 'me') {
+    participantFilter = { OR: [{ player1Id: req.userId }, { player2Id: req.userId }] };
+  }
+
   const where = {
     ...(game ? { game } : {}),
-    ...(scope === 'me'
-      ? { OR: [{ player1Id: req.userId }, { player2Id: req.userId }] }
-      : {}),
+    ...(participantFilter ?? {}),
   };
   const list = await prisma.match.findMany({
     where, orderBy: { createdAt: 'desc' }, take: 100, include: MATCH_INCLUDE,
