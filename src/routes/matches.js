@@ -31,6 +31,10 @@ const shifumiBlock = z.union([shifumiIrlBlock, shifumiRemoteBlock]);
 const createBody = z.object({
   game: z.string().min(1),
   opponentPseudo: z.string().trim().min(1).max(24).optional().nullable(),
+  // mode = comment l'opponent est mis en relation avec moi :
+  //  - 'local'  : on joue sur le même appareil, status passe direct à 'active' (défaut, compat)
+  //  - 'remote' : invitation envoyée, l'opponent doit accepter via POST /matches/:id/accept
+  mode: z.enum(['local', 'remote']).optional(),
   shifumi: shifumiBlock.optional(),
 });
 
@@ -59,11 +63,20 @@ router.post('/', requireAuth, async (req, res) => {
     if (!opponent) throw new HttpError(404, 'opponent_not_found', 'not_found');
     if (opponent.id === req.userId) throw new HttpError(400, 'cannot_play_self', 'bad_request');
   }
+
+  // Sans opponent → on génère un code et le match attend qu'un joueur rejoigne.
+  // Avec opponent + mode 'remote' → invitation : pending, pas de code.
+  // Avec opponent + mode 'local' (défaut) → match commence direct sur le même appareil.
+  const wantsInvite = body.mode === 'remote';
+  const status = !opponent ? 'pending' : (wantsInvite ? 'pending' : 'active');
+  const meta = opponent && wantsInvite ? { invite: true } : null;
+
   const base = {
     game: body.game,
     player1Id: req.userId,
     player2Id: opponent?.id ?? null,
-    status: opponent ? 'active' : 'pending',
+    status,
+    ...(meta ? { metadata: meta } : {}),
   };
   let match;
   for (let i = 0; i < 5; i++) {
@@ -77,6 +90,38 @@ router.post('/', requireAuth, async (req, res) => {
   }
   if (!match) throw new HttpError(500, 'code_generation_failed', 'internal_error');
   res.status(201).json(maskFor(match, req.userId));
+});
+
+// Acceptation d'une invitation : seul player2 et seulement si status=pending.
+router.post('/:id/accept', requireAuth, async (req, res) => {
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player2Id !== req.userId) throw new HttpError(403, 'not_invitee', 'forbidden');
+  if (m.status !== 'pending') throw new HttpError(409, 'match_not_pending', 'conflict');
+  if (m.metadata?.invite !== true) throw new HttpError(400, 'not_an_invitation', 'bad_request');
+  const updated = await prisma.match.update({
+    where: { id: m.id },
+    data: { status: 'active', metadata: { ...(m.metadata || {}), invite: false, acceptedAt: new Date().toISOString() } },
+    include: MATCH_INCLUDE,
+  });
+  res.json(maskFor(updated, req.userId));
+});
+
+// Refus d'une invitation : player2 ou player1 peut annuler tant que pending+invite.
+router.post('/:id/decline', requireAuth, async (req, res) => {
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status !== 'pending') throw new HttpError(409, 'match_not_pending', 'conflict');
+  if (m.metadata?.invite !== true) throw new HttpError(400, 'not_an_invitation', 'bad_request');
+  const updated = await prisma.match.update({
+    where: { id: m.id },
+    data: { status: 'cancelled', finishedAt: new Date() },
+    include: MATCH_INCLUDE,
+  });
+  res.json(maskFor(updated, req.userId));
 });
 
 async function createShifumi(req, res, body) {
