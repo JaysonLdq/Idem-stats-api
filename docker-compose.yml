@@ -1,0 +1,52 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: idem
+      POSTGRES_PASSWORD: idem
+      POSTGRES_DB: idem
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://idem:idem@db:5432/idem?schema=public
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      JWT_EXPIRES_IN: 30d
+      BCRYPT_ROUNDS: 10
+      PORT: 3000
+      NODE_ENV: production
+      CORS_ORIGINS: http://localhost:5173,chrome-extension://*
+    ports:
+      - "3000:3000"
+    command: sh -c "npx prisma migrate deploy && node src/server.js"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.idem.rule=Host(`${API_HOST:-api.idem.localhost}`)
+      - traefik.http.routers.idem.entrypoints=web
+      - traefik.http.services.idem.loadbalancer.server.port=3000
+
+volumes:
+  dbdata: {}
