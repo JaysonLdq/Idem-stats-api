@@ -8,7 +8,7 @@ import { generateCode } from '../lib/code.js';
 
 const router = Router();
 
-const PUBLIC_USER = { select: { id: true, pseudo: true, createdAt: true } };
+const PUBLIC_USER = { select: { id: true, pseudo: true, avatarUrl: true, createdAt: true } };
 const MATCH_INCLUDE = { player1: PUBLIC_USER, player2: PUBLIC_USER };
 
 const createBody = z.object({

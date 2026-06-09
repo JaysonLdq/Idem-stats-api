@@ -5,6 +5,9 @@ node_modules/
 .DS_Store
 coverage/
 dist/
+
+# avatars uploadés — on garde le dossier (.gitkeep) mais pas son contenu
+uploads/avatars/
 .turbo/
 .idea/
 .vscode/
