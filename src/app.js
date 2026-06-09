@@ -5,6 +5,7 @@ import authRoutes from './routes/auth.js';
 import meRoutes from './routes/me.js';
 import matchesRoutes from './routes/matches.js';
 import leaderboardRoutes from './routes/leaderboard.js';
+import { UPLOAD_ROOT, ensureAvatarsDir } from './lib/avatar-storage.js';
 
 export function buildApp() {
   const app = express();
@@ -40,6 +41,14 @@ export function buildApp() {
       },
       credentials: false,
     }),
+  );
+
+  // Servir les avatars uploadés. On crée le dossier si besoin (idempotent).
+  ensureAvatarsDir().catch(() => {});
+  app.use(
+    '/uploads',
+    // cache simple : 7 jours, immutable (les filenames contiennent un timestamp donc jamais réutilisés)
+    express.static(UPLOAD_ROOT, { maxAge: '7d', immutable: true, fallthrough: false }),
   );
 
   app.get('/health', (_req, res) => {

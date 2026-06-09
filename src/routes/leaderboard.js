@@ -38,7 +38,7 @@ router.get('/', requireAuth, async (req, res) => {
   const includeIdleUsers = !game;
   const users = await prisma.user.findMany({
     where: includeIdleUsers ? undefined : { id: { in: [...stats.keys()] } },
-    select: { id: true, pseudo: true, createdAt: true },
+    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true },
   });
 
   const entries = users.map((u) => {
