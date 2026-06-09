@@ -13,16 +13,29 @@ export function buildApp() {
 
   const origins = (process.env.CORS_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
   const allowAll = origins.length === 0 || origins.includes('*');
+  const isTest = process.env.NODE_ENV === 'test';
+
+  // Log d'effective au démarrage (silencieux en test) — utile pour diagnostiquer
+  // "pourquoi mon front se prend du CORS ?"
+  if (!isTest) {
+    // eslint-disable-next-line no-console
+    console.log(`[idem-stats-api] CORS = ${allowAll ? '* (allow all)' : origins.join(' , ')}`);
+  }
 
   app.use(
     cors({
-      // IMPORTANT : on ne JETTE JAMAIS d'erreur ici. Si l'origin n'est pas autorisée,
-      // on appelle cb(null, false) → la réponse part SANS les headers CORS, et le
-      // navigateur affiche un vrai "missing CORS header" (pas un 500 sans header).
+      // On ne JETTE JAMAIS d'erreur ici (sinon Express renvoie 500 sans header CORS,
+      // ce qui empile les erreurs côté navigateur). On répond cb(null, false) → la
+      // réponse part sans Access-Control-Allow-Origin et le navigateur affiche le
+      // vrai message CORS attendu.
       origin(origin, cb) {
         if (!origin) return cb(null, true); // requêtes serveur-à-serveur, curl, etc.
         if (allowAll) return cb(null, true);
         const ok = origins.some((o) => matchOrigin(o, origin));
+        if (!ok && !isTest) {
+          // eslint-disable-next-line no-console
+          console.warn(`[idem-stats-api] CORS REJECT origin="${origin}" — not in [${origins.join(', ')}]`);
+        }
         cb(null, ok);
       },
       credentials: false,
@@ -47,7 +60,8 @@ export function buildApp() {
 // Match d'une origine vs un motif. Supporte :
 //   - exact            : "https://idem.example.com"
 //   - suffix wildcard  : "chrome-extension://*"   → matche "chrome-extension://abc"
-//   - prefix wildcard  : "*.docker.localhost"     → matche "http(s)://x.docker.localhost"
+//   - prefix wildcard  : "*.docker.localhost"     → matche n'importe quel sous-domaine
+//                                                   en http ou https
 //   - "*" tout seul    : tout autoriser (géré en amont via allowAll)
 function matchOrigin(pattern, origin) {
   if (pattern === origin) return true;
