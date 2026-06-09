@@ -6,6 +6,8 @@ export const GAMES = {
   baby:          { display: 'Babyfoot',      maxScore: 99,  autoFinishAt: null },
   pingpong:      { display: 'Ping-pong',     maxScore: 21,  autoFinishAt: 11 },
   clicker:       { display: 'Click Battle',  maxScore: 9999, autoFinishAt: null },
+  // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
+  shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
 };
 
 export function gameOrThrow(id) {
@@ -30,4 +32,15 @@ export function shouldAutoFinish(gameId, scoreP1, scoreP2) {
 export function computeWinner({ scoreP1, scoreP2, player1Id, player2Id }) {
   if (scoreP1 === scoreP2) return null;
   return scoreP1 > scoreP2 ? player1Id : player2Id;
+}
+
+// ── Shifumi (papier / pierre / ciseaux) ───────────────────────────────
+export const RPS_PICKS = ['rock', 'paper', 'scissors'];
+export const RPS_LABELS = { rock: 'Pierre', paper: 'Papier', scissors: 'Ciseaux' };
+
+// pierre écrase ciseaux, ciseaux coupe papier, papier emballe pierre.
+const RPS_BEATS = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
+
+export function rpsBeats(winnerPick, loserPick) {
+  return RPS_BEATS[winnerPick] === loserPick;
 }

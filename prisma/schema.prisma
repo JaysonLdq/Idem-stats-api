@@ -42,6 +42,8 @@ model Match {
   scoreP1    Int         @default(0)
   scoreP2    Int         @default(0)
   source     MatchSource?
+  // Champ libre par jeu — pour le shifumi : { winnerPick, loserPick }.
+  metadata   Json?
   createdAt  DateTime    @default(now())
   finishedAt DateTime?
 
