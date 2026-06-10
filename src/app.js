@@ -11,6 +11,7 @@ import inboxRoutes from './routes/inbox.js';
 import badgesRoutes from './routes/badges.js';
 import wallOfShameRoutes from './routes/wall-of-shame.js';
 import blackjackRoutes from './routes/blackjack.js';
+import messagesRoutes from './routes/messages.js';
 import { UPLOAD_ROOT, ensureAvatarsDir } from './lib/avatar-storage.js';
 
 export function buildApp() {
@@ -71,6 +72,7 @@ export function buildApp() {
   app.use('/badges', wrapAsync(badgesRoutes));
   app.use('/wall-of-shame', wrapAsync(wallOfShameRoutes));
   app.use('/blackjack', wrapAsync(blackjackRoutes));
+  app.use('/messages', wrapAsync(messagesRoutes));
 
   app.use(notFound);
   app.use(errorHandler);
