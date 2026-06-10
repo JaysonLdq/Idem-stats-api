@@ -34,8 +34,8 @@ model User {
   avatarUrl    String?
   createdAt    DateTime @default(now())
   // Solde de jetons : gagnés via les 1v1, dépensés au casino (blackjack).
-  // 100 par défaut pour avoir de quoi tenter sa chance dès l'inscription.
-  coins        Int      @default(100)
+  // 500 par défaut pour avoir de quoi tenter sa chance dès l'inscription.
+  coins        Int      @default(500)
 
   matchesAsP1 Match[] @relation("MatchP1")
   matchesAsP2 Match[] @relation("MatchP2")
