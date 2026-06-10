@@ -458,6 +458,32 @@ router.post('/:id/play/input', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Relay emote — un participant déclenche un emote, on broadcast aux autres.
+// Très permissif sur l'état du match (active OU pending OU finished) : un
+// emote victoire/défaite peut tomber juste après la fin. Limité à des clés
+// connues pour éviter d'injecter du HTML/un nom long via SSE.
+const emoteBody = z.object({
+  key: z.string().min(1).max(32).regex(/^[a-z0-9_-]+$/i),
+});
+router.post('/:id/emote', requireAuth, async (req, res) => {
+  const body = emoteBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) {
+    broadcaster.send(otherId, 'match.emote', {
+      matchId: m.id, from: req.userId, key: body.key,
+    });
+  }
+  res.json({ ok: true });
+});
+
 router.post('/:id/play/state', requireAuth, async (req, res) => {
   const body = playInputBody.parse(req.body);
   const m = await prisma.match.findUnique({
