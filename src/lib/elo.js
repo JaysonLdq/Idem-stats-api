@@ -18,7 +18,10 @@
 // joueur qui n'a jamais touché à Snake ne se prend pas 1000 par défaut en
 // pénalité — seulement les jeux pratiqués comptent).
 
-export const INITIAL_ELO = 1000;
+// Spawn = milieu de la fourchette Sharknado (1250-1449). Donne aux nouveaux
+// joueurs un rang correct pour démarrer, et leur laisse de la marge avant de
+// dégringoler à Guez Merguez (sous 1250) ou Pue sa grand mère (sous 1100).
+export const INITIAL_ELO = 1300;
 export const K_NEWBIE = 40;        // < 20 matchs sur le jeu
 export const K_ESTABLISHED = 24;   // 20+ matchs
 
