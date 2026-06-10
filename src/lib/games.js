@@ -6,6 +6,8 @@ export const GAMES = {
   baby:          { display: 'Babyfoot',      maxScore: 99,  autoFinishAt: null },
   pingpong:      { display: 'Ping-pong',     maxScore: 21,  autoFinishAt: 11 },
   clicker:       { display: 'Click Battle',  maxScore: 9999, autoFinishAt: null },
+  // Snake 1v1 jouable sur même clavier (flèches vs ZQSD). Score = longueur finale.
+  snake:         { display: 'Snake 1v1',     maxScore: 999, autoFinishAt: null },
   // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
   shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
 };
