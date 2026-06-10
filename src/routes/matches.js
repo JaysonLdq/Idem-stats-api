@@ -37,6 +37,8 @@ const shifumiRemoteBlock = z.object({
   mode: z.literal('remote'),
   myPick: z.enum(RPS_PICKS),
   condition: shifumiCondition,
+  // BO1 (défaut) / BO3 / BO5. Premier à ceil(bestOf/2) wins gagne la série.
+  bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]).optional(),
 });
 const shifumiBlock = z.union([shifumiIrlBlock, shifumiRemoteBlock]);
 
@@ -194,6 +196,10 @@ async function createShifumi(req, res, body) {
           creatorPick: myPick,
           round: 1,
           history: [],
+          // BO1 = 1 manche unique (comportement legacy). BO3/BO5 = série en cours.
+          bestOf: body.shifumi.bestOf || 1,
+          seriesP1: 0,
+          seriesP2: 0,
           ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
         },
       },
@@ -295,35 +301,58 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
     return res.json(maskFor(updated, req.userId));
   }
 
-  // Sinon : on désigne un gagnant et on termine
-  let winnerId, winnerPick, loserPick;
+  // Sinon : on désigne un gagnant DE LA MANCHE
+  let roundWinnerId, winnerPick, loserPick;
   if (rpsBeats(creatorPick, opponentPick)) {
-    winnerId = m.player1Id; winnerPick = creatorPick; loserPick = opponentPick;
+    roundWinnerId = m.player1Id; winnerPick = creatorPick; loserPick = opponentPick;
   } else {
-    winnerId = m.player2Id; winnerPick = opponentPick; loserPick = creatorPick;
+    roundWinnerId = m.player2Id; winnerPick = opponentPick; loserPick = creatorPick;
   }
   const [p1, p2] = await Promise.all([
     prisma.user.findUnique({ where: { id: m.player1Id }, select: { pseudo: true } }),
     prisma.user.findUnique({ where: { id: m.player2Id }, select: { pseudo: true } }),
   ]);
-  const winnerPseudo = winnerId === m.player1Id ? p1.pseudo : p2.pseudo;
-  const loserPseudo  = winnerId === m.player1Id ? p2.pseudo : p1.pseudo;
+  const roundWinnerPseudo = roundWinnerId === m.player1Id ? p1.pseudo : p2.pseudo;
 
-  meta.history.push({ round: meta.round, creatorPick, opponentPick, winnerPseudo });
+  // Met à jour le score de la série
+  const bestOf = meta.bestOf || 1;
+  meta.seriesP1 = (meta.seriesP1 || 0) + (roundWinnerId === m.player1Id ? 1 : 0);
+  meta.seriesP2 = (meta.seriesP2 || 0) + (roundWinnerId === m.player2Id ? 1 : 0);
+  meta.history.push({ round: meta.round, creatorPick, opponentPick, winnerPseudo: roundWinnerPseudo });
+  delete meta.lastTieRound;
+
+  const targetWins = Math.ceil(bestOf / 2);
+  const seriesOver = meta.seriesP1 >= targetWins || meta.seriesP2 >= targetWins;
+
+  if (!seriesOver) {
+    // Série en cours → on reset les picks et on avance d'un round
+    meta.creatorPick = null;
+    meta.opponentPick = null;
+    meta.round += 1;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Série terminée → vainqueur de série = vainqueur du match
+  const seriesWinnerId = meta.seriesP1 >= targetWins ? m.player1Id : m.player2Id;
+  const winnerPseudo = seriesWinnerId === m.player1Id ? p1.pseudo : p2.pseudo;
+  const loserPseudo  = seriesWinnerId === m.player1Id ? p2.pseudo : p1.pseudo;
   meta.winnerPseudo = winnerPseudo;
   meta.loserPseudo = loserPseudo;
   meta.winnerPick = winnerPick;
   meta.loserPick = loserPick;
-  delete meta.lastTieRound;
 
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       status: 'finished',
       finishedAt: new Date(),
-      scoreP1: winnerId === m.player1Id ? 1 : 0,
-      scoreP2: winnerId === m.player2Id ? 1 : 0,
-      winnerId,
+      // Score du match = score de la série (au lieu d'un 1-0 binaire) pour les
+      // séries multi-manches. On garde l'invariant "winner a le plus haut score".
+      scoreP1: meta.seriesP1,
+      scoreP2: meta.seriesP2,
+      winnerId: seriesWinnerId,
       metadata: meta,
     },
     include: MATCH_INCLUDE,
