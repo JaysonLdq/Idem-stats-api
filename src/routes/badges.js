@@ -23,6 +23,7 @@ router.get('/:pseudo', requireAuth, async (req, res) => {
     select: {
       game: true, status: true,
       player1Id: true, player2Id: true, winnerId: true,
+      scoreP1: true, scoreP2: true,
       finishedAt: true,
     },
   });

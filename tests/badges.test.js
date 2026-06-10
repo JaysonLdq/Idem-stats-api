@@ -2,10 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { computeBadges } from '../src/lib/badges.js';
 
 // Helpers d'arrangement
-function m(game, p1, p2, winner, daysAgo = 0) {
+function m(game, p1, p2, winner, daysAgo = 0, scoreP1 = 0, scoreP2 = 0) {
   return {
     game, status: 'finished',
     player1Id: p1, player2Id: p2, winnerId: winner,
+    scoreP1, scoreP2,
     finishedAt: new Date(Date.now() - daysAgo * 86_400_000),
   };
 }
@@ -75,6 +76,29 @@ describe('computeBadges', () => {
   it('Fantôme si jamais joué', () => {
     const z = computeBadges({ userId: 'z', pseudo: 'z', allMatches: [] });
     expect(z.find((x) => x.id === 'volume-ghost')).toBeDefined();
+  });
+
+  it("5-0 au Basket Random : badge éphémère décerné au perdant", () => {
+    const matches = [m('basket_random', 'a', 'b', 'a', 0, 5, 0)];
+    const b = computeBadges({ userId: 'b', pseudo: 'b', allMatches: matches });
+    expect(b.find((x) => x.id === 'shame-basket-5-0')).toBeDefined();
+    const a = computeBadges({ userId: 'a', pseudo: 'a', allMatches: matches });
+    expect(a.find((x) => x.id === 'shame-basket-5-0')).toBeUndefined();
+  });
+
+  it("5-0 Basket : le badge disparaît dès que le perdant rejoue (quel que soit le jeu)", () => {
+    const matches = [
+      m('basket_random', 'a', 'b', 'a', 2, 5, 0), // ancien : 5-0 sur b
+      m('darts',         'b', 'c', 'b', 0, 7, 4), // dernier match de b : autre jeu → badge nettoyé
+    ];
+    const b = computeBadges({ userId: 'b', pseudo: 'b', allMatches: matches });
+    expect(b.find((x) => x.id === 'shame-basket-5-0')).toBeUndefined();
+  });
+
+  it("Score 5-1 au Basket : pas de badge mangeave (perfect game requis)", () => {
+    const matches = [m('basket_random', 'a', 'b', 'a', 0, 5, 1)];
+    const b = computeBadges({ userId: 'b', pseudo: 'b', allMatches: matches });
+    expect(b.find((x) => x.id === 'shame-basket-5-0')).toBeUndefined();
   });
 
   it('Monster par jeu : un user peut être Monster sur jeu X et Pue sa mère sur jeu Y', () => {
