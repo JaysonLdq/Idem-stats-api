@@ -1,7 +1,10 @@
 // Règles par jeu. Le jeu détermine la borne du score et si la fin est automatique.
 
 export const GAMES = {
-  basket_random: { display: 'Basket Random', maxScore: 5, autoFinishAt: 5 },
+  // Premier à 5 ou 6 : Basket Random a des balles "double point" qui peuvent
+  // faire passer le score de 4 à 6 en une fois. autoFinishAt=5 + helper en ">="
+  // → 5 ou 6 déclenchent la victoire. maxScore=6 plafonne le score envoyé.
+  basket_random: { display: 'Basket Random', maxScore: 6, autoFinishAt: 5 },
   darts:         { display: 'Fléchettes',    maxScore: 999, autoFinishAt: null },
   baby:          { display: 'Babyfoot',      maxScore: 99,  autoFinishAt: null },
   pingpong:      { display: 'Ping-pong',     maxScore: 21,  autoFinishAt: 11 },
