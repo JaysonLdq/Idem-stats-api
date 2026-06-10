@@ -21,6 +21,9 @@ export const GAMES = {
   chess:         { display: 'Échecs',        maxScore: 1,   autoFinishAt: null },
   // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
   shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
+  // Kart Race 3D : score = 5 - position d'arrivée (1er=4, 2e=3, 3e=2, 4e=1).
+  // Pas d'auto-finish : c'est la course qui décide quand poster.
+  kart:          { display: 'Kart Race',     maxScore: 4,   autoFinishAt: null },
 };
 
 export function gameOrThrow(id) {
