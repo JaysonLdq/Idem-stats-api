@@ -127,6 +127,31 @@ export function computeBadges({ userId, pseudo, allMatches }) {
     badges.push({ id: 'streak-rolling', kind: 'streak', label: 'Sur une lancée', description: `${streak} victoires d'affilée.`, emoji: '✨', tone: 'win' });
   }
 
+  // ── Badge éphémère : 5-0 au Basket Random ────────────────────────────
+  // Si le dernier match joué est un Basket Random perdu 5-0, le badge de
+  // honte tient jusqu'au prochain match (peu importe le jeu — joue n'importe
+  // quoi pour le faire disparaître).
+  const lastMatch = userMatches[0];
+  if (
+    lastMatch &&
+    lastMatch.game === 'basket_random' &&
+    lastMatch.winnerId !== userId
+  ) {
+    const userIsP1 = lastMatch.player1Id === userId;
+    const myScore  = userIsP1 ? lastMatch.scoreP1 : lastMatch.scoreP2;
+    const oppScore = userIsP1 ? lastMatch.scoreP2 : lastMatch.scoreP1;
+    if (myScore === 0 && oppScore === 5) {
+      badges.push({
+        id: 'shame-basket-5-0',
+        kind: 'shame',
+        label: "S'est fait mangeave le cul",
+        description: "Pris un 5-0 sur Basket Random au dernier match. Disparaît dès que tu rejoues.",
+        emoji: '🔞',
+        tone: 'loss',
+      });
+    }
+  }
+
   // ─ Easter egg : si played === 0
   if (played === 0) {
     badges.push({ id: 'volume-ghost', kind: 'volume', label: 'Fantôme', description: 'Inscrit mais jamais joué. Mystérieux.', emoji: '👻', tone: 'muted' });
