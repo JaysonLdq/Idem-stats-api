@@ -7,7 +7,10 @@ export const GAMES = {
   basket_random: { display: 'Basket Random', maxScore: 6, autoFinishAt: 5 },
   darts:         { display: 'Fléchettes',    maxScore: 999, autoFinishAt: null },
   baby:          { display: 'Babyfoot',      maxScore: 99,  autoFinishAt: null },
-  pingpong:      { display: 'Ping-pong',     maxScore: 21,  autoFinishAt: 11 },
+  // Renommé pingpong → pong côté front. On garde 'pingpong' comme alias caché
+  // pour ne pas casser les matchs existants en BDD avec game='pingpong'.
+  pong:          { display: 'Pong',          maxScore: 21,  autoFinishAt: 10 },
+  pingpong:      { display: 'Pong',          maxScore: 21,  autoFinishAt: 10 },
   clicker:       { display: 'Click Battle',  maxScore: 9999, autoFinishAt: null },
   // Snake 1v1 jouable sur même clavier (flèches vs ZQSD). Score = longueur finale.
   snake:         { display: 'Snake 1v1',     maxScore: 999, autoFinishAt: null },
