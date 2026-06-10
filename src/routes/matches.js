@@ -123,6 +123,33 @@ router.post('/:id/accept', requireAuth, async (req, res) => {
   res.json(maskFor(updated, req.userId));
 });
 
+// Annulation d'un match en cours : n'importe quel participant peut annuler
+// tant que le match n'est pas déjà finished/cancelled. Marqué `cancelled` →
+// ignoré par le classement, l'historique et les badges. Utile pour ne pas
+// pollue les stats avec des matchs démarrés par erreur ou abandonnés.
+router.post('/:id/cancel', requireAuth, async (req, res) => {
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status === 'finished' || m.status === 'cancelled') {
+    throw new HttpError(409, 'match_not_cancellable', 'conflict');
+  }
+  const updated = await prisma.match.update({
+    where: { id: m.id },
+    data: {
+      status: 'cancelled',
+      finishedAt: new Date(),
+      // Préserve les metadata existants ET note qui a annulé + quand.
+      metadata: { ...(m.metadata || {}), cancelledBy: req.userId, cancelledAt: new Date().toISOString() },
+    },
+    include: MATCH_INCLUDE,
+  });
+  pushMatchUpdate(updated, 'match.update');
+  res.json(maskFor(updated, req.userId));
+});
+
 // Refus d'une invitation : player2 ou player1 peut annuler tant que pending+invite.
 router.post('/:id/decline', requireAuth, async (req, res) => {
   const m = await prisma.match.findUnique({ where: { id: req.params.id } });
