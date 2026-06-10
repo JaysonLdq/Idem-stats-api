@@ -413,6 +413,56 @@ router.patch('/:id/score', requireAuth, async (req, res) => {
   res.json(maskFor(updated, req.userId));
 });
 
+// ─── Sync temps réel pour les jeux jouables en remote ─────────────────────
+// Architecture host-authoritative :
+//   - player1 (créateur) = HOST → fait tourner la game loop, broadcast l'état
+//     à player2 via SSE event 'match.play.state'
+//   - player2 (joiner)   = GUEST → envoie ses inputs au host via SSE event
+//     'match.play.input' (clavier → direction canonique)
+// Les 2 endpoints ci-dessous sont juste des relais : le serveur n'a aucune
+// connaissance du jeu, il fait juste passer JSON arbitraire entre les 2
+// participants. Sécurité : seuls les participants du match peuvent écrire.
+
+const playInputBody = z.object({
+  // Payload libre — chaque jeu définit son propre schéma. Limité 1ko côté
+  // express.json() pour éviter les abus.
+  payload: z.any(),
+});
+
+router.post('/:id/play/input', requireAuth, async (req, res) => {
+  const body = playInputBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true, status: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
+  // L'input va à l'autre participant
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) broadcaster.send(otherId, 'match.play.input', { matchId: m.id, from: req.userId, payload: body.payload });
+  res.json({ ok: true });
+});
+
+router.post('/:id/play/state', requireAuth, async (req, res) => {
+  const body = playInputBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true, status: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
+  // L'état va à l'autre participant
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) broadcaster.send(otherId, 'match.play.state', { matchId: m.id, payload: body.payload });
+  res.json({ ok: true });
+});
+
 // POST /matches/:id/finish
 router.post('/:id/finish', requireAuth, async (req, res) => {
   const m = await prisma.match.findUnique({ where: { id: req.params.id } });
