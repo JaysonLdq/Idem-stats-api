@@ -32,6 +32,10 @@ const shifumiIrlBlock = z.object({
   winnerPick: z.enum(RPS_PICKS),
   loserPick: z.enum(RPS_PICKS),
   condition: shifumiCondition,
+  // BO1 (défaut), BO3 ou BO5. En IRL c'est une saisie résultat-first : on note
+  // juste la série et le pick final (du dernier round) — le score enregistré
+  // est ceil(bestOf/2) pour le gagnant, 0 pour le perdant (sweep par défaut).
+  bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]).optional(),
 });
 const shifumiRemoteBlock = z.object({
   mode: z.literal('remote'),
@@ -219,6 +223,8 @@ async function createShifumi(req, res, body) {
   const opponentWon = winnerPseudo === opponent.pseudo;
   if (!meWon && !opponentWon) throw new HttpError(400, 'winner_not_in_match', 'bad_request');
   const winnerId = meWon ? req.userId : opponent.id;
+  const bestOf = body.shifumi.bestOf || 1;
+  const targetWins = Math.ceil(bestOf / 2);
   const match = await prisma.match.create({
     data: {
       game: 'shifumi',
@@ -226,8 +232,9 @@ async function createShifumi(req, res, body) {
       player2Id: opponent.id,
       status: 'finished',
       finishedAt: new Date(),
-      scoreP1: meWon ? 1 : 0,
-      scoreP2: meWon ? 0 : 1,
+      // Score = score de la série. Sweep par défaut en IRL (loser=0).
+      scoreP1: meWon ? targetWins : 0,
+      scoreP2: meWon ? 0 : targetWins,
       winnerId,
       source: 'manual',
       metadata: {
@@ -236,6 +243,9 @@ async function createShifumi(req, res, body) {
         loserPseudo: meWon ? opponent.pseudo : req.pseudo,
         winnerPick,
         loserPick,
+        bestOf,
+        seriesP1: meWon ? targetWins : 0,
+        seriesP2: meWon ? 0 : targetWins,
         ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
       },
     },
