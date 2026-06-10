@@ -95,15 +95,16 @@ export function computeGlobalElos(ratings) {
   return out;
 }
 
-// Tiers de rank. Ascending order strictly required.
+// Tiers de rank — barème custom maison. Ascending order strictly required.
+// Tous les nouveaux joueurs démarrent à 1000 ELO → ils sont Pue sa grand mère
+// jusqu'à preuve du contraire. Personne n'est épargné.
 const TIERS = [
-  { min: 0,    name: 'Bronze',  color: '#cd7f32', emoji: '🥉' },
-  { min: 1100, name: 'Argent',  color: '#c0c0c0', emoji: '🥈' },
-  { min: 1250, name: 'Or',      color: '#ffd700', emoji: '🥇' },
-  { min: 1400, name: 'Platine', color: '#7ad6ff', emoji: '💠' },
-  { min: 1600, name: 'Diamant', color: '#b9f2ff', emoji: '💎' },
-  { min: 1800, name: 'Maître',  color: '#c84cf2', emoji: '👑' },
-  { min: 2000, name: 'Légende', color: '#ff4dff', emoji: '⚡' },
+  { min: 0,    name: 'Pue sa grand mère', color: '#8B5A3C', emoji: '💩' },
+  { min: 1100, name: 'Guez Merguez',      color: '#FF8C42', emoji: '🌭' },
+  { min: 1250, name: 'Sharknado',         color: '#38B0FF', emoji: '🦈' },
+  { min: 1450, name: 'Goat',              color: '#F0F0F0', emoji: '🐐' },
+  { min: 1650, name: 'Trigrao',           color: '#B026FF', emoji: '🐅' },
+  { min: 1900, name: 'Canigoat',          color: '#FFD700', emoji: '🏆' },
 ];
 
 /** Retourne { name, color, emoji, min, nextMin } pour un ELO donné. */
