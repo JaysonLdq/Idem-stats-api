@@ -17,6 +17,8 @@ export const GAMES = {
   // Billard 8-ball : 7 solid + 7 stripe + cue + noire. Score envoyé = bonus 100
   // pour le vainqueur (correctement potée par la noire) + boules de son groupe.
   billiards:     { display: 'Billard',       maxScore: 200, autoFinishAt: null },
+  // Échecs 1v1 : score envoyé = 1 pour le vainqueur, 0 pour le perdant, 0-0 nul.
+  chess:         { display: 'Échecs',        maxScore: 1,   autoFinishAt: null },
   // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
   shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
 };
