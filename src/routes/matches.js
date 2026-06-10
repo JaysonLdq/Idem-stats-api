@@ -6,6 +6,7 @@ import { HttpError } from '../middleware/error.js';
 import { gameOrThrow, shouldAutoFinish, computeWinner, RPS_PICKS, rpsBeats } from '../lib/games.js';
 import { generateCode } from '../lib/code.js';
 import { broadcaster } from '../lib/broadcaster.js';
+import { awardMatchCoins } from '../lib/coins.js';
 
 // Helper : push un event "match.update" aux 2 participants (chacun avec son masquage).
 function pushMatchUpdate(m, type = 'match.update') {
@@ -251,6 +252,7 @@ async function createShifumi(req, res, body) {
     },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(match.player1Id, match.player2Id, winnerId);
   res.status(201).json(maskFor(match, req.userId));
 }
 
@@ -367,6 +369,7 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
     },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(m.player1Id, m.player2Id, seriesWinnerId);
   pushMatchUpdate(updated, 'shifumi.resolved');
   res.json(maskFor(updated, req.userId));
 });
@@ -409,6 +412,7 @@ router.patch('/:id/score', requireAuth, async (req, res) => {
     },
     include: MATCH_INCLUDE,
   });
+  if (autoFinish) await awardMatchCoins(m.player1Id, m.player2Id, winnerId);
   pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
@@ -480,6 +484,7 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
     data: { status: 'finished', finishedAt: new Date(), winnerId },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(m.player1Id, m.player2Id, winnerId);
   pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
