@@ -11,8 +11,9 @@ export const GAMES = {
   clicker:       { display: 'Click Battle',  maxScore: 9999, autoFinishAt: null },
   // Snake 1v1 jouable sur même clavier (flèches vs ZQSD). Score = longueur finale.
   snake:         { display: 'Snake 1v1',     maxScore: 999, autoFinishAt: null },
-  // Billard : 8 boules + cue. Score = boules pochetées. Match nul possible (4-4).
-  billiards:     { display: 'Billard',       maxScore: 8,   autoFinishAt: null },
+  // Billard 8-ball : 7 solid + 7 stripe + cue + noire. Score envoyé = bonus 100
+  // pour le vainqueur (correctement potée par la noire) + boules de son groupe.
+  billiards:     { display: 'Billard',       maxScore: 200, autoFinishAt: null },
   // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
   shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
 };
