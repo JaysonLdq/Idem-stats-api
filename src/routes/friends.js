@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../db/prisma.js';
 import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
+import { broadcaster } from '../lib/broadcaster.js';
 
 const router = Router();
 
@@ -28,6 +29,8 @@ router.post('/', requireAuth, async (req, res) => {
       data: { status: 'accepted', acceptedAt: new Date() },
       include: { requester: { select: PUBLIC_USER_SELECT }, addressee: { select: PUBLIC_USER_SELECT } },
     });
+    // Notifie l'autre côté en temps réel
+    broadcaster.send(other.id, 'friend.accepted', toPublic(accepted, other.id));
     return res.json(toPublic(accepted, req.userId));
   }
   if (reverse?.status === 'accepted') return res.json(toPublic(reverse, req.userId));
@@ -38,6 +41,8 @@ router.post('/', requireAuth, async (req, res) => {
       data: { requesterId: req.userId, addresseeId: other.id },
       include: { requester: { select: PUBLIC_USER_SELECT }, addressee: { select: PUBLIC_USER_SELECT } },
     });
+    // Notifie l'addressee : il a une nouvelle demande dans son inbox
+    broadcaster.send(other.id, 'friend.request', toPublic(created, other.id));
     res.status(201).json(toPublic(created, req.userId));
   } catch (e) {
     if (e?.code === 'P2002') {
@@ -84,6 +89,8 @@ router.post('/:id/accept', requireAuth, async (req, res) => {
     data: { status: 'accepted', acceptedAt: new Date() },
     include: { requester: { select: PUBLIC_USER_SELECT }, addressee: { select: PUBLIC_USER_SELECT } },
   });
+  // Notifie le requester qu'on a accepté
+  broadcaster.send(fr.requesterId, 'friend.accepted', toPublic(accepted, fr.requesterId));
   res.json(toPublic(accepted, req.userId));
 });
 

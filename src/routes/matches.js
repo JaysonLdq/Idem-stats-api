@@ -5,6 +5,13 @@ import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
 import { gameOrThrow, shouldAutoFinish, computeWinner, RPS_PICKS, rpsBeats } from '../lib/games.js';
 import { generateCode } from '../lib/code.js';
+import { broadcaster } from '../lib/broadcaster.js';
+
+// Helper : push un event "match.update" aux 2 participants (chacun avec son masquage).
+function pushMatchUpdate(m, type = 'match.update') {
+  if (m.player1Id) broadcaster.send(m.player1Id, type, maskFor(m, m.player1Id));
+  if (m.player2Id) broadcaster.send(m.player2Id, type, maskFor(m, m.player2Id));
+}
 
 const router = Router();
 
@@ -94,6 +101,9 @@ router.post('/', requireAuth, async (req, res) => {
     }
   }
   if (!match) throw new HttpError(500, 'code_generation_failed', 'internal_error');
+  // SSE : invitation envoyée → notifie player2 ; sinon match local → on broadcast quand même
+  // pour rafraîchir sa liste de matchs.
+  pushMatchUpdate(match, wantsInvite ? 'match.invite' : 'match.update');
   res.status(201).json(maskFor(match, req.userId));
 });
 
@@ -109,6 +119,7 @@ router.post('/:id/accept', requireAuth, async (req, res) => {
     data: { status: 'active', metadata: { ...(m.metadata || {}), invite: false, acceptedAt: new Date().toISOString() } },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -126,6 +137,7 @@ router.post('/:id/decline', requireAuth, async (req, res) => {
     data: { status: 'cancelled', finishedAt: new Date() },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -160,6 +172,8 @@ async function createShifumi(req, res, body) {
       },
       include: MATCH_INCLUDE,
     });
+    // SSE : challenge shifumi remote envoyé → notifie player2
+    pushMatchUpdate(match, 'shifumi.challenge');
     return res.status(201).json(maskFor(match, req.userId));
   }
 
@@ -235,6 +249,7 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   if (!meta.creatorPick || !meta.opponentPick) {
     delete meta.lastTieRound;
     const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
     return res.json(maskFor(updated, req.userId));
   }
 
@@ -249,6 +264,7 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
     meta.opponentPick = null;
     meta.round += 1;
     const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
     return res.json(maskFor(updated, req.userId));
   }
 
@@ -285,6 +301,7 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
     },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'shifumi.resolved');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -300,6 +317,7 @@ router.post('/join', requireAuth, async (req, res) => {
     data: { player2Id: req.userId, status: 'active' },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -325,6 +343,7 @@ router.patch('/:id/score', requireAuth, async (req, res) => {
     },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -345,6 +364,7 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
     data: { status: 'finished', finishedAt: new Date(), winnerId },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
