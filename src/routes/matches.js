@@ -7,6 +7,7 @@ import { gameOrThrow, shouldAutoFinish, computeWinner, RPS_PICKS, rpsBeats } fro
 import { generateCode } from '../lib/code.js';
 import { broadcaster } from '../lib/broadcaster.js';
 import { awardMatchCoins } from '../lib/coins.js';
+import { computeRewards } from '../lib/rewards.js';
 
 // Helper : push un event "match.update" aux 2 participants (chacun avec son masquage).
 function pushMatchUpdate(m, type = 'match.update') {
@@ -226,6 +227,7 @@ async function createShifumi(req, res, body) {
   const winnerId = meWon ? req.userId : opponent.id;
   const bestOf = body.shifumi.bestOf || 1;
   const targetWins = Math.ceil(bestOf / 2);
+  const rewards = await computeRewards(req.userId, opponent.id, 'shifumi', winnerId);
   const match = await prisma.match.create({
     data: {
       game: 'shifumi',
@@ -233,7 +235,6 @@ async function createShifumi(req, res, body) {
       player2Id: opponent.id,
       status: 'finished',
       finishedAt: new Date(),
-      // Score = score de la série. Sweep par défaut en IRL (loser=0).
       scoreP1: meWon ? targetWins : 0,
       scoreP2: meWon ? 0 : targetWins,
       winnerId,
@@ -247,6 +248,7 @@ async function createShifumi(req, res, body) {
         bestOf,
         seriesP1: meWon ? targetWins : 0,
         seriesP2: meWon ? 0 : targetWins,
+        rewards,
         ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
       },
     },
@@ -355,13 +357,15 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   meta.winnerPick = winnerPick;
   meta.loserPick = loserPick;
 
+  // Compute rewards BEFORE marking the match as finished (so the "before" state
+  // doesn't include this match) and stuff them in metadata.
+  const shifumiRewards = await computeRewards(m.player1Id, m.player2Id, 'shifumi', seriesWinnerId);
+  meta.rewards = shifumiRewards;
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       status: 'finished',
       finishedAt: new Date(),
-      // Score du match = score de la série (au lieu d'un 1-0 binaire) pour les
-      // séries multi-manches. On garde l'invariant "winner a le plus haut score".
       scoreP1: meta.seriesP1,
       scoreP2: meta.seriesP2,
       winnerId: seriesWinnerId,
@@ -404,11 +408,15 @@ router.patch('/:id/score', requireAuth, async (req, res) => {
   const winnerId = autoFinish
     ? computeWinner({ scoreP1, scoreP2, player1Id: m.player1Id, player2Id: m.player2Id })
     : null;
+  const rewards = autoFinish ? await computeRewards(m.player1Id, m.player2Id, m.game, winnerId) : null;
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       scoreP1, scoreP2, source: body.source,
-      ...(autoFinish ? { status: 'finished', finishedAt: new Date(), winnerId } : {}),
+      ...(autoFinish ? {
+        status: 'finished', finishedAt: new Date(), winnerId,
+        metadata: { ...(m.metadata || {}), rewards },
+      } : {}),
     },
     include: MATCH_INCLUDE,
   });
@@ -479,9 +487,13 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
     scoreP1: m.scoreP1, scoreP2: m.scoreP2,
     player1Id: m.player1Id, player2Id: m.player2Id,
   });
+  const rewards = await computeRewards(m.player1Id, m.player2Id, m.game, winnerId);
   const updated = await prisma.match.update({
     where: { id: m.id },
-    data: { status: 'finished', finishedAt: new Date(), winnerId },
+    data: {
+      status: 'finished', finishedAt: new Date(), winnerId,
+      metadata: { ...(m.metadata || {}), rewards },
+    },
     include: MATCH_INCLUDE,
   });
   await awardMatchCoins(m.player1Id, m.player2Id, winnerId);
