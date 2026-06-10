@@ -148,10 +148,13 @@ async function createShifumi(req, res, body) {
         source: 'web',
         scoreP1: 0,
         scoreP2: 0,
-        // creatorPick masqué côté opponent jusqu'à la résolution
+        // creatorPick masqué côté opponent jusqu'à la résolution.
+        // round = 1 au départ. history = liste des rounds nul écoulés (pour ré-affichage).
         metadata: {
           mode: 'remote',
           creatorPick: myPick,
+          round: 1,
+          history: [],
           ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
         },
       },
@@ -194,7 +197,15 @@ async function createShifumi(req, res, body) {
   res.status(201).json(maskFor(match, req.userId));
 }
 
-// POST /matches/:id/shifumi-pick — pick de l'opposant en mode remote ; déclenche la résolution.
+// POST /matches/:id/shifumi-pick — pick d'un joueur en mode remote.
+// Comportement :
+//   - Round 1 : creatorPick est déjà posé à la création, seul l'opponent envoie son pick.
+//   - Round 2+ (après une égalité) : les 2 picks ont été reset, chacun re-soumet.
+//   - Quand les 2 picks sont commis :
+//     - Si rpsBeats() → status=finished, winner calculé.
+//     - Si égalité → on push le round à history, on reset les 2 picks, round++,
+//       status reste pending. Le client détecte le tie via "lastTieRound" et relance
+//       l'UI de pick pour les deux joueurs.
 router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   const body = shifumiPickBody.parse(req.body);
   const m = await prisma.match.findUnique({ where: { id: req.params.id } });
@@ -202,58 +213,75 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   if (m.game !== 'shifumi') throw new HttpError(400, 'not_a_shifumi_match', 'bad_request');
   if (m.status !== 'pending') throw new HttpError(409, 'match_not_pending', 'conflict');
   if (m.metadata?.mode !== 'remote') throw new HttpError(400, 'not_a_remote_shifumi', 'bad_request');
-  if (m.player2Id !== req.userId) throw new HttpError(403, 'not_opponent', 'forbidden');
 
-  const creatorPick = m.metadata?.creatorPick;
-  if (!creatorPick) throw new HttpError(500, 'missing_creator_pick', 'internal_error');
-  const opponentPick = body.pick;
+  const isP1 = m.player1Id === req.userId;
+  const isP2 = m.player2Id === req.userId;
+  if (!isP1 && !isP2) throw new HttpError(403, 'not_a_participant', 'forbidden');
 
-  // Égalité ? On laisse pendant — chacun re-pick. Strict tie = on re-met pending sans pick côté
-  // opposant (qui devra re-soumettre). On garde simple : si égalité, on rejette le pick et le
-  // client peut re-proposer ; ou bien on résout en "match nul". Choix produit : on accepte
-  // l'égalité comme match nul (winnerId null, scores 0-0, status finished).
-  let scoreP1 = 0;
-  let scoreP2 = 0;
-  let winnerId = null;
-  let winnerPseudo = null;
-  let loserPseudo = null;
-  let winnerPick = null;
-  let loserPick = null;
-  if (creatorPick === opponentPick) {
-    // Match nul — pas de vainqueur, on ferme proprement.
-  } else if (rpsBeats(creatorPick, opponentPick)) {
-    scoreP1 = 1;
-    winnerId = m.player1Id;
-    winnerPick = creatorPick;
-    loserPick = opponentPick;
+  const meta = { ...(m.metadata || {}) };
+  meta.history = meta.history || [];
+  meta.round = meta.round || 1;
+
+  // Pose le pick s'il n'est pas déjà posé pour ce round
+  if (isP1) {
+    if (meta.creatorPick) throw new HttpError(409, 'already_picked_this_round', 'conflict');
+    meta.creatorPick = body.pick;
   } else {
-    scoreP2 = 1;
-    winnerId = m.player2Id;
-    winnerPick = opponentPick;
-    loserPick = creatorPick;
+    if (meta.opponentPick) throw new HttpError(409, 'already_picked_this_round', 'conflict');
+    meta.opponentPick = body.pick;
   }
 
-  // Pseudo lookup (un select court suffit)
+  // Pas encore les 2 picks → on attend l'autre, on stocke et on rend le match tel quel
+  if (!meta.creatorPick || !meta.opponentPick) {
+    delete meta.lastTieRound;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Les 2 picks sont là → on résout ce round
+  const { creatorPick, opponentPick } = meta;
+
+  // Égalité → on relance un round
+  if (creatorPick === opponentPick) {
+    meta.history.push({ round: meta.round, creatorPick, opponentPick, tie: true });
+    meta.lastTieRound = meta.round; // le client peut détecter "il vient d'y avoir un tie"
+    meta.creatorPick = null;
+    meta.opponentPick = null;
+    meta.round += 1;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Sinon : on désigne un gagnant et on termine
+  let winnerId, winnerPick, loserPick;
+  if (rpsBeats(creatorPick, opponentPick)) {
+    winnerId = m.player1Id; winnerPick = creatorPick; loserPick = opponentPick;
+  } else {
+    winnerId = m.player2Id; winnerPick = opponentPick; loserPick = creatorPick;
+  }
   const [p1, p2] = await Promise.all([
     prisma.user.findUnique({ where: { id: m.player1Id }, select: { pseudo: true } }),
     prisma.user.findUnique({ where: { id: m.player2Id }, select: { pseudo: true } }),
   ]);
-  if (winnerId === m.player1Id) { winnerPseudo = p1.pseudo; loserPseudo = p2.pseudo; }
-  else if (winnerId === m.player2Id) { winnerPseudo = p2.pseudo; loserPseudo = p1.pseudo; }
+  const winnerPseudo = winnerId === m.player1Id ? p1.pseudo : p2.pseudo;
+  const loserPseudo  = winnerId === m.player1Id ? p2.pseudo : p1.pseudo;
+
+  meta.history.push({ round: meta.round, creatorPick, opponentPick, winnerPseudo });
+  meta.winnerPseudo = winnerPseudo;
+  meta.loserPseudo = loserPseudo;
+  meta.winnerPick = winnerPick;
+  meta.loserPick = loserPick;
+  delete meta.lastTieRound;
 
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       status: 'finished',
       finishedAt: new Date(),
-      scoreP1, scoreP2, winnerId,
-      metadata: {
-        mode: 'remote',
-        creatorPick,
-        opponentPick,
-        ...(winnerPseudo ? { winnerPseudo, loserPseudo, winnerPick, loserPick } : {}),
-        tie: winnerPseudo == null,
-      },
+      scoreP1: winnerId === m.player1Id ? 1 : 0,
+      scoreP2: winnerId === m.player2Id ? 1 : 0,
+      winnerId,
+      metadata: meta,
     },
     include: MATCH_INCLUDE,
   });
@@ -384,12 +412,19 @@ function maskFor(m, viewerId) {
   ) {
     const isCreator = m.player1Id === viewerId;
     const meta = { ...out.metadata };
-    if (!isCreator) {
-      // L'opponent ne voit pas le pick du créateur tant qu'il n'a pas répondu.
-      delete meta.creatorPick;
-      meta.awaitingMyPick = true;
+    // Masquage symétrique : chacun ne voit que son propre pick tant que les 2 ne sont pas
+    // posés. Round 1 : creatorPick était toujours là côté creator, opponentPick côté opponent.
+    // Round 2+ après un tie : pareil — round réinitialisé, chacun pose à nouveau.
+    if (isCreator) {
+      // Côté créateur : on cache son éventuel adversaire (toujours null en round-pending,
+      // mais on durcit au cas où) et on annonce "en attente de l'adversaire" si lui a posé.
+      delete meta.opponentPick;
+      if (meta.creatorPick && !out.metadata.opponentPick) meta.awaitingOpponentPick = true;
+      if (!meta.creatorPick) meta.awaitingMyPick = true;
     } else {
-      meta.awaitingOpponentPick = true;
+      delete meta.creatorPick;
+      if (meta.opponentPick && !out.metadata.creatorPick) meta.awaitingOpponentPick = true;
+      if (!meta.opponentPick) meta.awaitingMyPick = true;
     }
     out.metadata = meta;
   }
