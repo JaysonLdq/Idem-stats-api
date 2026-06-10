@@ -25,15 +25,23 @@ router.get('/', requireAuth, async (_req, res) => {
     orderBy: { finishedAt: 'desc' },
   });
 
+  // Helper de mapping match → entrée breaking-news (loser/winner + meta)
+  const toEntry = (m) => ({
+    match: { id: m.id, finishedAt: m.finishedAt },
+    loser:  m.scoreP1 === 0 ? m.player1 : m.player2,
+    winner: m.scoreP1 === 5 ? m.player1 : m.player2,
+  });
+
   // Latest 5-0 (peut être null si personne ne s'est encore pris de fessée)
-  const latestMatch = matches[0] ?? null;
-  const latest = latestMatch
-    ? {
-        match: { id: latestMatch.id, finishedAt: latestMatch.finishedAt },
-        loser:  latestMatch.scoreP1 === 0 ? latestMatch.player1 : latestMatch.player2,
-        winner: latestMatch.scoreP1 === 5 ? latestMatch.player1 : latestMatch.player2,
-      }
-    : null;
+  const latest = matches[0] ? toEntry(matches[0]) : null;
+
+  // Tous les 5-0 datant de moins d'1h → pour le ticker breaking-news qui
+  // tourne en haut du site. Si rien dans la dernière heure, le ticker est
+  // masqué côté client.
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const recent = matches
+    .filter((m) => m.finishedAt && m.finishedAt.getTime() > oneHourAgo)
+    .map(toEntry);
 
   // Ranking : compte les 5-0 pris par chaque user
   const byUser = new Map();
@@ -47,7 +55,7 @@ router.get('/', requireAuth, async (_req, res) => {
   }
   const ranking = [...byUser.values()].sort((a, b) => b.count - a.count || (b.lastAt - a.lastAt));
 
-  res.json({ latest, ranking, totalEvents: matches.length });
+  res.json({ latest, recent, ranking, totalEvents: matches.length });
 });
 
 export default router;
