@@ -89,13 +89,11 @@ router.post('/avatar', requireAuth, upload.single('file'), async (req, res) => {
   res.json(user);
 });
 
-// GET /me/inbox — compteurs de non-lus pour le badge global.
-router.get('/inbox', requireAuth, async (req, res) => {
-  const unreadMessages = await prisma.message.count({
-    where: { recipientId: req.userId, readAt: null },
-  });
-  res.json({ unreadMessages, total: unreadMessages });
-});
+// NOTE : le compteur unreadMessages est désormais dans /me/inbox (routes/inbox.js)
+// — l'ancienne définition ici écrasait celle-là parce que `/me` est monté avant
+// `/me/inbox` dans app.js. Ne PAS recréer cette route ici. Pour les messages
+// non lus, utiliser le champ `unreadMessages` du payload renvoyé par
+// GET /me/inbox côté inbox.js.
 
 // Permet de revenir aux initiales (avatarUrl null).
 router.delete('/avatar', requireAuth, async (req, res) => {
