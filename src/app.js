@@ -6,9 +6,13 @@ import meRoutes from './routes/me.js';
 import matchesRoutes from './routes/matches.js';
 import leaderboardRoutes from './routes/leaderboard.js';
 import friendsRoutes from './routes/friends.js';
-import messagesRoutes from './routes/messages.js';
-import eventsRoutes from './routes/events.js';
 import adminRoutes from './routes/admin.js';
+import eventsRoutes from './routes/events.js';
+import inboxRoutes from './routes/inbox.js';
+import badgesRoutes from './routes/badges.js';
+import wallOfShameRoutes from './routes/wall-of-shame.js';
+import blackjackRoutes from './routes/blackjack.js';
+import messagesRoutes from './routes/messages.js';
 import { UPLOAD_ROOT, ensureAvatarsDir } from './lib/avatar-storage.js';
 
 export function buildApp() {
@@ -48,7 +52,7 @@ export function buildApp() {
   );
 
   // Servir les avatars uploadés. On crée le dossier si besoin (idempotent).
-  ensureAvatarsDir().catch(() => {});
+  ensureAvatarsDir().catch(() => { });
   app.use(
     '/uploads',
     // cache simple : 7 jours, immutable (les filenames contiennent un timestamp donc jamais réutilisés)
@@ -64,9 +68,13 @@ export function buildApp() {
   app.use('/matches', wrapAsync(matchesRoutes));
   app.use('/leaderboard', wrapAsync(leaderboardRoutes));
   app.use('/friends', wrapAsync(friendsRoutes));
-  app.use('/messages', wrapAsync(messagesRoutes));
   app.use('/admin', wrapAsync(adminRoutes));
-  app.use('/events', eventsRoutes);
+  app.use('/me/inbox', wrapAsync(inboxRoutes));
+  app.use('/events', wrapAsync(eventsRoutes));
+  app.use('/badges', wrapAsync(badgesRoutes));
+  app.use('/wall-of-shame', wrapAsync(wallOfShameRoutes));
+  app.use('/blackjack', wrapAsync(blackjackRoutes));
+  app.use('/messages', wrapAsync(messagesRoutes));
 
   app.use(notFound);
   app.use(errorHandler);

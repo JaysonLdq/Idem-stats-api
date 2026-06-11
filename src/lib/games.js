@@ -1,13 +1,29 @@
 // Règles par jeu. Le jeu détermine la borne du score et si la fin est automatique.
 
 export const GAMES = {
-  basket_random: { display: 'Basket Random', maxScore: 5, autoFinishAt: 5 },
+  // Premier à 5 ou 6 : Basket Random a des balles "double point" qui peuvent
+  // faire passer le score de 4 à 6 en une fois. autoFinishAt=5 + helper en ">="
+  // → 5 ou 6 déclenchent la victoire. maxScore=6 plafonne le score envoyé.
+  basket_random: { display: 'Basket Random', maxScore: 6, autoFinishAt: 5 },
   darts:         { display: 'Fléchettes',    maxScore: 999, autoFinishAt: null },
   baby:          { display: 'Babyfoot',      maxScore: 99,  autoFinishAt: null },
-  pingpong:      { display: 'Ping-pong',     maxScore: 21,  autoFinishAt: 11 },
+  // Renommé pingpong → pong côté front. On garde 'pingpong' comme alias caché
+  // pour ne pas casser les matchs existants en BDD avec game='pingpong'.
+  pong:          { display: 'Pong',          maxScore: 21,  autoFinishAt: 10 },
+  pingpong:      { display: 'Pong',          maxScore: 21,  autoFinishAt: 10 },
   clicker:       { display: 'Click Battle',  maxScore: 9999, autoFinishAt: null },
+  // Snake 1v1 jouable sur même clavier (flèches vs ZQSD). Score = longueur finale.
+  snake:         { display: 'Snake 1v1',     maxScore: 999, autoFinishAt: null },
+  // Billard 8-ball : 7 solid + 7 stripe + cue + noire. Score envoyé = bonus 100
+  // pour le vainqueur (correctement potée par la noire) + boules de son groupe.
+  billiards:     { display: 'Billard',       maxScore: 200, autoFinishAt: null },
+  // Échecs 1v1 : score envoyé = 1 pour le vainqueur, 0 pour le perdant, 0-0 nul.
+  chess:         { display: 'Échecs',        maxScore: 1,   autoFinishAt: null },
   // Shifumi : duel en 1 manche, créé déjà résolu (pas de score qui monte).
   shifumi:       { display: 'Shifumi',       maxScore: 1,   autoFinishAt: null },
+  // Kart Race 3D : score = 5 - position d'arrivée (1er=4, 2e=3, 3e=2, 4e=1).
+  // Pas d'auto-finish : c'est la course qui décide quand poster.
+  kart:          { display: 'Kart Race',     maxScore: 4,   autoFinishAt: null },
 };
 
 export function gameOrThrow(id) {

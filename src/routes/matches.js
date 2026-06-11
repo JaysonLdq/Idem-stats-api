@@ -5,6 +5,15 @@ import { requireAuth } from '../middleware/auth.js';
 import { HttpError } from '../middleware/error.js';
 import { gameOrThrow, shouldAutoFinish, computeWinner, RPS_PICKS, rpsBeats } from '../lib/games.js';
 import { generateCode } from '../lib/code.js';
+import { broadcaster } from '../lib/broadcaster.js';
+import { awardMatchCoins } from '../lib/coins.js';
+import { computeRewards } from '../lib/rewards.js';
+
+// Helper : push un event "match.update" aux 2 participants (chacun avec son masquage).
+function pushMatchUpdate(m, type = 'match.update') {
+  if (m.player1Id) broadcaster.send(m.player1Id, type, maskFor(m, m.player1Id));
+  if (m.player2Id) broadcaster.send(m.player2Id, type, maskFor(m, m.player2Id));
+}
 
 const router = Router();
 
@@ -25,11 +34,17 @@ const shifumiIrlBlock = z.object({
   winnerPick: z.enum(RPS_PICKS),
   loserPick: z.enum(RPS_PICKS),
   condition: shifumiCondition,
+  // BO1 (défaut), BO3 ou BO5. En IRL c'est une saisie résultat-first : on note
+  // juste la série et le pick final (du dernier round) — le score enregistré
+  // est ceil(bestOf/2) pour le gagnant, 0 pour le perdant (sweep par défaut).
+  bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]).optional(),
 });
 const shifumiRemoteBlock = z.object({
   mode: z.literal('remote'),
   myPick: z.enum(RPS_PICKS),
   condition: shifumiCondition,
+  // BO1 (défaut) / BO3 / BO5. Premier à ceil(bestOf/2) wins gagne la série.
+  bestOf: z.union([z.literal(1), z.literal(3), z.literal(5)]).optional(),
 });
 const shifumiBlock = z.union([shifumiIrlBlock, shifumiRemoteBlock]);
 
@@ -94,6 +109,9 @@ router.post('/', requireAuth, async (req, res) => {
     }
   }
   if (!match) throw new HttpError(500, 'code_generation_failed', 'internal_error');
+  // SSE : invitation envoyée → notifie player2 ; sinon match local → on broadcast quand même
+  // pour rafraîchir sa liste de matchs.
+  pushMatchUpdate(match, wantsInvite ? 'match.invite' : 'match.update');
   res.status(201).json(maskFor(match, req.userId));
 });
 
@@ -109,6 +127,34 @@ router.post('/:id/accept', requireAuth, async (req, res) => {
     data: { status: 'active', metadata: { ...(m.metadata || {}), invite: false, acceptedAt: new Date().toISOString() } },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
+  res.json(maskFor(updated, req.userId));
+});
+
+// Annulation d'un match en cours : n'importe quel participant peut annuler
+// tant que le match n'est pas déjà finished/cancelled. Marqué `cancelled` →
+// ignoré par le classement, l'historique et les badges. Utile pour ne pas
+// pollue les stats avec des matchs démarrés par erreur ou abandonnés.
+router.post('/:id/cancel', requireAuth, async (req, res) => {
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status === 'finished' || m.status === 'cancelled') {
+    throw new HttpError(409, 'match_not_cancellable', 'conflict');
+  }
+  const updated = await prisma.match.update({
+    where: { id: m.id },
+    data: {
+      status: 'cancelled',
+      finishedAt: new Date(),
+      // Préserve les metadata existants ET note qui a annulé + quand.
+      metadata: { ...(m.metadata || {}), cancelledBy: req.userId, cancelledAt: new Date().toISOString() },
+    },
+    include: MATCH_INCLUDE,
+  });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -126,6 +172,7 @@ router.post('/:id/decline', requireAuth, async (req, res) => {
     data: { status: 'cancelled', finishedAt: new Date() },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -148,15 +195,24 @@ async function createShifumi(req, res, body) {
         source: 'web',
         scoreP1: 0,
         scoreP2: 0,
-        // creatorPick masqué côté opponent jusqu'à la résolution
+        // creatorPick masqué côté opponent jusqu'à la résolution.
+        // round = 1 au départ. history = liste des rounds nul écoulés (pour ré-affichage).
         metadata: {
           mode: 'remote',
           creatorPick: myPick,
+          round: 1,
+          history: [],
+          // BO1 = 1 manche unique (comportement legacy). BO3/BO5 = série en cours.
+          bestOf: body.shifumi.bestOf || 1,
+          seriesP1: 0,
+          seriesP2: 0,
           ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
         },
       },
       include: MATCH_INCLUDE,
     });
+    // SSE : challenge shifumi remote envoyé → notifie player2
+    pushMatchUpdate(match, 'shifumi.challenge');
     return res.status(201).json(maskFor(match, req.userId));
   }
 
@@ -169,6 +225,9 @@ async function createShifumi(req, res, body) {
   const opponentWon = winnerPseudo === opponent.pseudo;
   if (!meWon && !opponentWon) throw new HttpError(400, 'winner_not_in_match', 'bad_request');
   const winnerId = meWon ? req.userId : opponent.id;
+  const bestOf = body.shifumi.bestOf || 1;
+  const targetWins = Math.ceil(bestOf / 2);
+  const rewards = await computeRewards(req.userId, opponent.id, 'shifumi', winnerId);
   const match = await prisma.match.create({
     data: {
       game: 'shifumi',
@@ -176,8 +235,8 @@ async function createShifumi(req, res, body) {
       player2Id: opponent.id,
       status: 'finished',
       finishedAt: new Date(),
-      scoreP1: meWon ? 1 : 0,
-      scoreP2: meWon ? 0 : 1,
+      scoreP1: meWon ? targetWins : 0,
+      scoreP2: meWon ? 0 : targetWins,
       winnerId,
       source: 'manual',
       metadata: {
@@ -186,15 +245,28 @@ async function createShifumi(req, res, body) {
         loserPseudo: meWon ? opponent.pseudo : req.pseudo,
         winnerPick,
         loserPick,
+        bestOf,
+        seriesP1: meWon ? targetWins : 0,
+        seriesP2: meWon ? 0 : targetWins,
+        rewards,
         ...(body.shifumi.condition ? { condition: body.shifumi.condition } : {}),
       },
     },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(match.player1Id, match.player2Id, winnerId);
   res.status(201).json(maskFor(match, req.userId));
 }
 
-// POST /matches/:id/shifumi-pick — pick de l'opposant en mode remote ; déclenche la résolution.
+// POST /matches/:id/shifumi-pick — pick d'un joueur en mode remote.
+// Comportement :
+//   - Round 1 : creatorPick est déjà posé à la création, seul l'opponent envoie son pick.
+//   - Round 2+ (après une égalité) : les 2 picks ont été reset, chacun re-soumet.
+//   - Quand les 2 picks sont commis :
+//     - Si rpsBeats() → status=finished, winner calculé.
+//     - Si égalité → on push le round à history, on reset les 2 picks, round++,
+//       status reste pending. Le client détecte le tie via "lastTieRound" et relance
+//       l'UI de pick pour les deux joueurs.
 router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   const body = shifumiPickBody.parse(req.body);
   const m = await prisma.match.findUnique({ where: { id: req.params.id } });
@@ -202,61 +274,107 @@ router.post('/:id/shifumi-pick', requireAuth, async (req, res) => {
   if (m.game !== 'shifumi') throw new HttpError(400, 'not_a_shifumi_match', 'bad_request');
   if (m.status !== 'pending') throw new HttpError(409, 'match_not_pending', 'conflict');
   if (m.metadata?.mode !== 'remote') throw new HttpError(400, 'not_a_remote_shifumi', 'bad_request');
-  if (m.player2Id !== req.userId) throw new HttpError(403, 'not_opponent', 'forbidden');
 
-  const creatorPick = m.metadata?.creatorPick;
-  if (!creatorPick) throw new HttpError(500, 'missing_creator_pick', 'internal_error');
-  const opponentPick = body.pick;
+  const isP1 = m.player1Id === req.userId;
+  const isP2 = m.player2Id === req.userId;
+  if (!isP1 && !isP2) throw new HttpError(403, 'not_a_participant', 'forbidden');
 
-  // Égalité ? On laisse pendant — chacun re-pick. Strict tie = on re-met pending sans pick côté
-  // opposant (qui devra re-soumettre). On garde simple : si égalité, on rejette le pick et le
-  // client peut re-proposer ; ou bien on résout en "match nul". Choix produit : on accepte
-  // l'égalité comme match nul (winnerId null, scores 0-0, status finished).
-  let scoreP1 = 0;
-  let scoreP2 = 0;
-  let winnerId = null;
-  let winnerPseudo = null;
-  let loserPseudo = null;
-  let winnerPick = null;
-  let loserPick = null;
-  if (creatorPick === opponentPick) {
-    // Match nul — pas de vainqueur, on ferme proprement.
-  } else if (rpsBeats(creatorPick, opponentPick)) {
-    scoreP1 = 1;
-    winnerId = m.player1Id;
-    winnerPick = creatorPick;
-    loserPick = opponentPick;
+  const meta = { ...(m.metadata || {}) };
+  meta.history = meta.history || [];
+  meta.round = meta.round || 1;
+
+  // Pose le pick s'il n'est pas déjà posé pour ce round
+  if (isP1) {
+    if (meta.creatorPick) throw new HttpError(409, 'already_picked_this_round', 'conflict');
+    meta.creatorPick = body.pick;
   } else {
-    scoreP2 = 1;
-    winnerId = m.player2Id;
-    winnerPick = opponentPick;
-    loserPick = creatorPick;
+    if (meta.opponentPick) throw new HttpError(409, 'already_picked_this_round', 'conflict');
+    meta.opponentPick = body.pick;
   }
 
-  // Pseudo lookup (un select court suffit)
+  // Pas encore les 2 picks → on attend l'autre, on stocke et on rend le match tel quel
+  if (!meta.creatorPick || !meta.opponentPick) {
+    delete meta.lastTieRound;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Les 2 picks sont là → on résout ce round
+  const { creatorPick, opponentPick } = meta;
+
+  // Égalité → on relance un round
+  if (creatorPick === opponentPick) {
+    meta.history.push({ round: meta.round, creatorPick, opponentPick, tie: true });
+    meta.lastTieRound = meta.round; // le client peut détecter "il vient d'y avoir un tie"
+    meta.creatorPick = null;
+    meta.opponentPick = null;
+    meta.round += 1;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Sinon : on désigne un gagnant DE LA MANCHE
+  let roundWinnerId, winnerPick, loserPick;
+  if (rpsBeats(creatorPick, opponentPick)) {
+    roundWinnerId = m.player1Id; winnerPick = creatorPick; loserPick = opponentPick;
+  } else {
+    roundWinnerId = m.player2Id; winnerPick = opponentPick; loserPick = creatorPick;
+  }
   const [p1, p2] = await Promise.all([
     prisma.user.findUnique({ where: { id: m.player1Id }, select: { pseudo: true } }),
     prisma.user.findUnique({ where: { id: m.player2Id }, select: { pseudo: true } }),
   ]);
-  if (winnerId === m.player1Id) { winnerPseudo = p1.pseudo; loserPseudo = p2.pseudo; }
-  else if (winnerId === m.player2Id) { winnerPseudo = p2.pseudo; loserPseudo = p1.pseudo; }
+  const roundWinnerPseudo = roundWinnerId === m.player1Id ? p1.pseudo : p2.pseudo;
 
+  // Met à jour le score de la série
+  const bestOf = meta.bestOf || 1;
+  meta.seriesP1 = (meta.seriesP1 || 0) + (roundWinnerId === m.player1Id ? 1 : 0);
+  meta.seriesP2 = (meta.seriesP2 || 0) + (roundWinnerId === m.player2Id ? 1 : 0);
+  meta.history.push({ round: meta.round, creatorPick, opponentPick, winnerPseudo: roundWinnerPseudo });
+  delete meta.lastTieRound;
+
+  const targetWins = Math.ceil(bestOf / 2);
+  const seriesOver = meta.seriesP1 >= targetWins || meta.seriesP2 >= targetWins;
+
+  if (!seriesOver) {
+    // Série en cours → on reset les picks et on avance d'un round
+    meta.creatorPick = null;
+    meta.opponentPick = null;
+    meta.round += 1;
+    const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta }, include: MATCH_INCLUDE });
+    pushMatchUpdate(updated, 'match.update');
+    return res.json(maskFor(updated, req.userId));
+  }
+
+  // Série terminée → vainqueur de série = vainqueur du match
+  const seriesWinnerId = meta.seriesP1 >= targetWins ? m.player1Id : m.player2Id;
+  const winnerPseudo = seriesWinnerId === m.player1Id ? p1.pseudo : p2.pseudo;
+  const loserPseudo  = seriesWinnerId === m.player1Id ? p2.pseudo : p1.pseudo;
+  meta.winnerPseudo = winnerPseudo;
+  meta.loserPseudo = loserPseudo;
+  meta.winnerPick = winnerPick;
+  meta.loserPick = loserPick;
+
+  // Compute rewards BEFORE marking the match as finished (so the "before" state
+  // doesn't include this match) and stuff them in metadata.
+  const shifumiRewards = await computeRewards(m.player1Id, m.player2Id, 'shifumi', seriesWinnerId);
+  meta.rewards = shifumiRewards;
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       status: 'finished',
       finishedAt: new Date(),
-      scoreP1, scoreP2, winnerId,
-      metadata: {
-        mode: 'remote',
-        creatorPick,
-        opponentPick,
-        ...(winnerPseudo ? { winnerPseudo, loserPseudo, winnerPick, loserPick } : {}),
-        tie: winnerPseudo == null,
-      },
+      scoreP1: meta.seriesP1,
+      scoreP2: meta.seriesP2,
+      winnerId: seriesWinnerId,
+      metadata: meta,
     },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(m.player1Id, m.player2Id, seriesWinnerId);
+  pushMatchUpdate(updated, 'shifumi.resolved');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -272,6 +390,7 @@ router.post('/join', requireAuth, async (req, res) => {
     data: { player2Id: req.userId, status: 'active' },
     include: MATCH_INCLUDE,
   });
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -289,15 +408,97 @@ router.patch('/:id/score', requireAuth, async (req, res) => {
   const winnerId = autoFinish
     ? computeWinner({ scoreP1, scoreP2, player1Id: m.player1Id, player2Id: m.player2Id })
     : null;
+  const rewards = autoFinish ? await computeRewards(m.player1Id, m.player2Id, m.game, winnerId) : null;
   const updated = await prisma.match.update({
     where: { id: m.id },
     data: {
       scoreP1, scoreP2, source: body.source,
-      ...(autoFinish ? { status: 'finished', finishedAt: new Date(), winnerId } : {}),
+      ...(autoFinish ? {
+        status: 'finished', finishedAt: new Date(), winnerId,
+        metadata: { ...(m.metadata || {}), rewards },
+      } : {}),
     },
     include: MATCH_INCLUDE,
   });
+  if (autoFinish) await awardMatchCoins(m.player1Id, m.player2Id, winnerId);
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
+});
+
+// ─── Sync temps réel pour les jeux jouables en remote ─────────────────────
+// Architecture host-authoritative :
+//   - player1 (créateur) = HOST → fait tourner la game loop, broadcast l'état
+//     à player2 via SSE event 'match.play.state'
+//   - player2 (joiner)   = GUEST → envoie ses inputs au host via SSE event
+//     'match.play.input' (clavier → direction canonique)
+// Les 2 endpoints ci-dessous sont juste des relais : le serveur n'a aucune
+// connaissance du jeu, il fait juste passer JSON arbitraire entre les 2
+// participants. Sécurité : seuls les participants du match peuvent écrire.
+
+const playInputBody = z.object({
+  // Payload libre — chaque jeu définit son propre schéma. Limité 1ko côté
+  // express.json() pour éviter les abus.
+  payload: z.any(),
+});
+
+router.post('/:id/play/input', requireAuth, async (req, res) => {
+  const body = playInputBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true, status: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
+  // L'input va à l'autre participant
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) broadcaster.send(otherId, 'match.play.input', { matchId: m.id, from: req.userId, payload: body.payload });
+  res.json({ ok: true });
+});
+
+// Relay emote — un participant déclenche un emote, on broadcast aux autres.
+// Très permissif sur l'état du match (active OU pending OU finished) : un
+// emote victoire/défaite peut tomber juste après la fin. Limité à des clés
+// connues pour éviter d'injecter du HTML/un nom long via SSE.
+const emoteBody = z.object({
+  key: z.string().min(1).max(32).regex(/^[a-z0-9_-]+$/i),
+});
+router.post('/:id/emote', requireAuth, async (req, res) => {
+  const body = emoteBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) {
+    broadcaster.send(otherId, 'match.emote', {
+      matchId: m.id, from: req.userId, key: body.key,
+    });
+  }
+  res.json({ ok: true });
+});
+
+router.post('/:id/play/state', requireAuth, async (req, res) => {
+  const body = playInputBody.parse(req.body);
+  const m = await prisma.match.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, player1Id: true, player2Id: true, status: true },
+  });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+    throw new HttpError(403, 'not_a_participant', 'forbidden');
+  }
+  if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
+  // L'état va à l'autre participant
+  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
+  if (otherId) broadcaster.send(otherId, 'match.play.state', { matchId: m.id, payload: body.payload });
+  res.json({ ok: true });
 });
 
 // POST /matches/:id/finish
@@ -312,11 +513,17 @@ router.post('/:id/finish', requireAuth, async (req, res) => {
     scoreP1: m.scoreP1, scoreP2: m.scoreP2,
     player1Id: m.player1Id, player2Id: m.player2Id,
   });
+  const rewards = await computeRewards(m.player1Id, m.player2Id, m.game, winnerId);
   const updated = await prisma.match.update({
     where: { id: m.id },
-    data: { status: 'finished', finishedAt: new Date(), winnerId },
+    data: {
+      status: 'finished', finishedAt: new Date(), winnerId,
+      metadata: { ...(m.metadata || {}), rewards },
+    },
     include: MATCH_INCLUDE,
   });
+  await awardMatchCoins(m.player1Id, m.player2Id, winnerId);
+  pushMatchUpdate(updated, 'match.update');
   res.json(maskFor(updated, req.userId));
 });
 
@@ -384,12 +591,19 @@ function maskFor(m, viewerId) {
   ) {
     const isCreator = m.player1Id === viewerId;
     const meta = { ...out.metadata };
-    if (!isCreator) {
-      // L'opponent ne voit pas le pick du créateur tant qu'il n'a pas répondu.
-      delete meta.creatorPick;
-      meta.awaitingMyPick = true;
+    // Masquage symétrique : chacun ne voit que son propre pick tant que les 2 ne sont pas
+    // posés. Round 1 : creatorPick était toujours là côté creator, opponentPick côté opponent.
+    // Round 2+ après un tie : pareil — round réinitialisé, chacun pose à nouveau.
+    if (isCreator) {
+      // Côté créateur : on cache son éventuel adversaire (toujours null en round-pending,
+      // mais on durcit au cas où) et on annonce "en attente de l'adversaire" si lui a posé.
+      delete meta.opponentPick;
+      if (meta.creatorPick && !out.metadata.opponentPick) meta.awaitingOpponentPick = true;
+      if (!meta.creatorPick) meta.awaitingMyPick = true;
     } else {
-      meta.awaitingOpponentPick = true;
+      delete meta.creatorPick;
+      if (meta.opponentPick && !out.metadata.creatorPick) meta.awaitingOpponentPick = true;
+      if (!meta.opponentPick) meta.awaitingMyPick = true;
     }
     out.metadata = meta;
   }

@@ -15,7 +15,11 @@ export const AVATARS_DIR = path.join(UPLOAD_ROOT, 'avatars');
 export const AVATAR_URL_PREFIX = '/uploads/avatars';
 
 export const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
-export const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+// Pas de plafond strict côté serveur. On garde une variable pour la cohérence
+// d'API (le route Multer s'en sert), mais on la met à une valeur très haute
+// pour ne pas refuser l'upload. Si tu veux durcir : surcharge via AVATAR_MAX_BYTES
+// dans l'env (utile en prod pour éviter qu'un utilisateur balance un fichier de 5 Go).
+export const MAX_BYTES = Number(process.env.AVATAR_MAX_BYTES) || Number.MAX_SAFE_INTEGER;
 
 const EXT_BY_MIME = {
   'image/jpeg': 'jpg',

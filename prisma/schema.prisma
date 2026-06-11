@@ -33,6 +33,9 @@ model User {
   passwordHash String
   avatarUrl    String?
   createdAt    DateTime @default(now())
+  // Solde de jetons : gagnés via les 1v1, dépensés au casino (blackjack).
+  // 500 par défaut pour avoir de quoi tenter sa chance dès l'inscription.
+  coins        Int      @default(500)
 
   matchesAsP1 Match[] @relation("MatchP1")
   matchesAsP2 Match[] @relation("MatchP2")
@@ -126,4 +129,23 @@ model Friendship {
 
   @@unique([requesterId, addresseeId])
   @@index([addresseeId, status])
+}
+
+// Message 1:1 entre amis. Pas d'entité "Conversation" : la conversation entre
+// A et B est l'ensemble des messages où {senderId, recipientId} = {A, B}.
+// readAt = quand le destinataire a marqué la conversation comme lue.
+model Message {
+  id          String   @id @default(cuid())
+  senderId    String
+  sender      User     @relation("MessageSender",    fields: [senderId],    references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User     @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  body        String   @db.VarChar(2000)
+  createdAt   DateTime @default(now())
+  readAt      DateTime?
+
+  // Sort court par fil + filtre non-lus du destinataire
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, senderId, createdAt])
+  @@index([recipientId, readAt])
 }
