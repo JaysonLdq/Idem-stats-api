@@ -22,7 +22,7 @@ router.get('/', requireAuth, async (req, res) => {
     select: {
       game: true,
       player1Id: true, player2Id: true, winnerId: true,
-      finishedAt: true,
+      finishedAt: true, status: true,
     },
     orderBy: { finishedAt: 'asc' },
   });
