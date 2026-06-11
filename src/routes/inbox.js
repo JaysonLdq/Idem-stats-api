@@ -13,7 +13,7 @@ const PUBLIC_USER = { id: true, pseudo: true, avatarUrl: true, createdAt: true }
 //   - duels shifumi remote où c'est à moi de pioche
 // Renvoie {friendRequests, matchInvites, shifumiPendingPicks, total}
 router.get('/', requireAuth, async (req, res) => {
-  const [friendRequests, allPending] = await Promise.all([
+  const [friendRequests, allPending, unreadMessages] = await Promise.all([
     prisma.friendship.findMany({
       where: { addresseeId: req.userId, status: 'pending' },
       include: { requester: { select: PUBLIC_USER } },
@@ -29,6 +29,12 @@ router.get('/', requireAuth, async (req, res) => {
         player2: { select: PUBLIC_USER },
       },
       orderBy: { createdAt: 'desc' },
+    }),
+    // Compteur de messages non lus — récupéré ici pour rester un seul endpoint
+    // /me/inbox. Le collègue avait dupliqué la route dans me.js et écrasait
+    // tout le payload — c'était LE bug "écran noir au clic cloche".
+    prisma.message.count({
+      where: { recipientId: req.userId, readAt: null },
     }),
   ]);
 
@@ -50,7 +56,7 @@ router.get('/', requireAuth, async (req, res) => {
     }
   }
 
-  const total = friendRequests.length + matchInvites.length + shifumiPendingPicks.length;
+  const total = friendRequests.length + matchInvites.length + shifumiPendingPicks.length + unreadMessages;
   res.json({
     friendRequests: friendRequests.map((r) => ({
       id: r.id,
@@ -59,6 +65,7 @@ router.get('/', requireAuth, async (req, res) => {
     })),
     matchInvites,
     shifumiPendingPicks,
+    unreadMessages,
     total,
   });
 });
