@@ -20,9 +20,11 @@ export async function computeRewards(player1Id, player2Id, game, winnerId) {
   if (!player1Id || !player2Id) return { winnerId: winnerId ?? null };
 
   // Tous les matchs finished SAUF celui-ci (qui n'est pas encore finalisé).
+  // On inclut `status` dans le select pour que les garde-fous internes de
+  // computeElos s'appuient dessus aussi (défense en profondeur).
   const others = await prisma.match.findMany({
     where: { status: 'finished' },
-    select: { game: true, player1Id: true, player2Id: true, winnerId: true, finishedAt: true },
+    select: { game: true, player1Id: true, player2Id: true, winnerId: true, finishedAt: true, status: true },
     orderBy: { finishedAt: 'asc' },
   });
   const ratings = computeElos(others);
