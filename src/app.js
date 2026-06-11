@@ -6,6 +6,9 @@ import meRoutes from './routes/me.js';
 import matchesRoutes from './routes/matches.js';
 import leaderboardRoutes from './routes/leaderboard.js';
 import friendsRoutes from './routes/friends.js';
+import messagesRoutes from './routes/messages.js';
+import eventsRoutes from './routes/events.js';
+import adminRoutes from './routes/admin.js';
 import { UPLOAD_ROOT, ensureAvatarsDir } from './lib/avatar-storage.js';
 
 export function buildApp() {
@@ -61,6 +64,9 @@ export function buildApp() {
   app.use('/matches', wrapAsync(matchesRoutes));
   app.use('/leaderboard', wrapAsync(leaderboardRoutes));
   app.use('/friends', wrapAsync(friendsRoutes));
+  app.use('/messages', wrapAsync(messagesRoutes));
+  app.use('/admin', wrapAsync(adminRoutes));
+  app.use('/events', eventsRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

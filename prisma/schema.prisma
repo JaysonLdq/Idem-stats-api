@@ -40,6 +40,12 @@ model User {
 
   sentFriendRequests     Friendship[] @relation("FriendRequester")
   receivedFriendRequests Friendship[] @relation("FriendAddressee")
+
+  sentMessages     Message[] @relation("MessageSender")
+  receivedMessages Message[] @relation("MessageRecipient")
+
+  adminTasks    AdminTask[]    @relation("AdminTaskAssignee")
+  adminComments AdminComment[] @relation("AdminCommentAuthor")
 }
 
 model Match {
@@ -69,6 +75,41 @@ model Match {
   @@index([game])
   @@index([player1Id])
   @@index([player2Id])
+}
+
+model Message {
+  id          String    @id @default(cuid())
+  senderId    String
+  sender      User      @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User      @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  body        String
+  createdAt   DateTime  @default(now())
+  readAt      DateTime?
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, readAt])
+}
+
+model AdminTask {
+  id         String         @id @default(cuid())
+  title      String
+  assigneeId String
+  assignee   User           @relation("AdminTaskAssignee", fields: [assigneeId], references: [id])
+  done       Boolean        @default(false)
+  createdAt  DateTime       @default(now())
+
+  comments   AdminComment[]
+}
+
+model AdminComment {
+  id        String    @id @default(cuid())
+  taskId    String
+  task      AdminTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User      @relation("AdminCommentAuthor", fields: [authorId], references: [id])
+  text      String
+  createdAt DateTime  @default(now())
 }
 
 // Demande/relation d'amitié. Une seule ligne par couple (requester, addressee).
