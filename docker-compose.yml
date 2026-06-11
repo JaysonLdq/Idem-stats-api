@@ -21,6 +21,12 @@ services:
       PORT: "3000"
       NODE_ENV: "development"
       CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+    # Expose le port 3000 du conteneur sur le port 3000 de l'hôte —
+    # permet à l'émulateur Android (qui voit l'hôte via 10.0.2.2) de
+    # joindre l'API en dev sans passer par Traefik. La prod reste
+    # routée par Traefik via le domaine (profile ssl), pas de bind host.
+    ports:
+      - "3000:3000"
     volumes:
       - .:/app
     working_dir: /app
