@@ -441,20 +441,37 @@ const playInputBody = z.object({
   payload: z.any(),
 });
 
+// Helper : liste des userIds participant à un match (player1 + player2 +
+// extras d'une éventuelle race kart 3-4P stockée dans metadata.race.guests).
+function raceParticipantIds(m) {
+  const meta = m.metadata || {};
+  const guests = Array.isArray(meta?.race?.guests) ? meta.race.guests.filter(Boolean) : [];
+  return [m.player1Id, m.player2Id, ...guests].filter(Boolean);
+}
+function isRaceParticipant(m, userId) {
+  return raceParticipantIds(m).includes(userId);
+}
+
 router.post('/:id/play/input', requireAuth, async (req, res) => {
   const body = playInputBody.parse(req.body);
   const m = await prisma.match.findUnique({
     where: { id: req.params.id },
-    select: { id: true, player1Id: true, player2Id: true, status: true },
+    select: { id: true, player1Id: true, player2Id: true, status: true, metadata: true },
   });
   if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
-  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+  if (!isRaceParticipant(m, req.userId)) {
     throw new HttpError(403, 'not_a_participant', 'forbidden');
   }
   if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
-  // L'input va à l'autre participant
-  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
-  if (otherId) broadcaster.send(otherId, 'match.play.input', { matchId: m.id, from: req.userId, payload: body.payload });
+  // L'input va TOUJOURS au host (player1Id) — c'est lui qui simule
+  // physique/ELO/etc. Le payload est taggé `from` pour qu'il sache de
+  // quel joueur vient l'input (utile en 3-4 joueurs : 3 inputs entrants
+  // à dispatch sur des karts différents).
+  if (m.player1Id && m.player1Id !== req.userId) {
+    broadcaster.send(m.player1Id, 'match.play.input', {
+      matchId: m.id, from: req.userId, payload: body.payload,
+    });
+  }
   res.json({ ok: true });
 });
 
@@ -488,16 +505,80 @@ router.post('/:id/play/state', requireAuth, async (req, res) => {
   const body = playInputBody.parse(req.body);
   const m = await prisma.match.findUnique({
     where: { id: req.params.id },
-    select: { id: true, player1Id: true, player2Id: true, status: true },
+    select: { id: true, player1Id: true, player2Id: true, status: true, metadata: true },
   });
   if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
-  if (m.player1Id !== req.userId && m.player2Id !== req.userId) {
+  if (!isRaceParticipant(m, req.userId)) {
     throw new HttpError(403, 'not_a_participant', 'forbidden');
   }
   if (m.status !== 'active') throw new HttpError(409, 'match_not_active', 'conflict');
-  // L'état va à l'autre participant
-  const otherId = m.player1Id === req.userId ? m.player2Id : m.player1Id;
-  if (otherId) broadcaster.send(otherId, 'match.play.state', { matchId: m.id, payload: body.payload });
+  // L'état va à TOUS les participants sauf le sender. Pour le 1v1 classique
+  // (pas de race.guests), ça reste le comportement historique (= player2Id).
+  // Pour le Kart 3-4P, ça broadcast aussi aux 1-2 extras.
+  const recipients = raceParticipantIds(m).filter((id) => id !== req.userId);
+  for (const id of recipients) {
+    broadcaster.send(id, 'match.play.state', { matchId: m.id, payload: body.payload });
+  }
+  res.json({ ok: true });
+});
+
+// ─── Kart 3-4P remote — lobby invite/join ─────────────────────────────
+// Pour ouvrir une course à 3-4 humains, l'host (player1) invite des amis
+// supplémentaires. Chaque invité ajouté reçoit un SSE 'match.race.invite'
+// et peut accepter via /race/join → il est ajouté à metadata.race.guests
+// et reçoit les broadcasts /play/state comme un participant standard.
+const raceInviteBody = z.object({ pseudo: z.string().trim().min(3).max(24) });
+router.post('/:id/race/invite', requireAuth, async (req, res) => {
+  const body = raceInviteBody.parse(req.body);
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  if (m.player1Id !== req.userId) throw new HttpError(403, 'not_host', 'forbidden');
+  if (m.game !== 'kart') throw new HttpError(400, 'race_only_for_kart', 'bad_request');
+  const other = await prisma.user.findUnique({ where: { pseudo: body.pseudo } });
+  if (!other) throw new HttpError(404, 'user_not_found', 'not_found');
+  if (other.id === m.player1Id || other.id === m.player2Id) {
+    throw new HttpError(400, 'already_in_race', 'bad_request');
+  }
+  const meta = (m.metadata && typeof m.metadata === 'object') ? { ...m.metadata } : {};
+  const race = (meta.race && typeof meta.race === 'object') ? { ...meta.race } : {};
+  const invitedIds = Array.isArray(race.invitedIds) ? [...new Set([...race.invitedIds, other.id])] : [other.id];
+  const guests = Array.isArray(race.guests) ? race.guests : [];
+  // Limite à 4 karts au total (host + main rival + 2 extras max)
+  if (guests.length + invitedIds.length > 2) {
+    throw new HttpError(400, 'race_full', 'bad_request');
+  }
+  race.invitedIds = invitedIds;
+  race.guests = guests;
+  meta.race = race;
+  const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta } });
+  // SSE à l'invité pour qu'il voie le bouton "Rejoindre la course" sur son
+  // écran (le front Inbox peut l'écouter et l'afficher dans la cloche).
+  broadcaster.send(other.id, 'match.race.invite', {
+    matchId: updated.id, hostPseudo: req.pseudo,
+  });
+  res.json({ ok: true });
+});
+
+router.post('/:id/race/join', requireAuth, async (req, res) => {
+  const m = await prisma.match.findUnique({ where: { id: req.params.id } });
+  if (!m) throw new HttpError(404, 'match_not_found', 'not_found');
+  const meta = (m.metadata && typeof m.metadata === 'object') ? { ...m.metadata } : {};
+  const race = (meta.race && typeof meta.race === 'object') ? { ...meta.race } : {};
+  const invitedIds = Array.isArray(race.invitedIds) ? race.invitedIds : [];
+  if (!invitedIds.includes(req.userId)) {
+    throw new HttpError(403, 'not_invited', 'forbidden');
+  }
+  const guests = Array.isArray(race.guests) ? [...new Set([...race.guests, req.userId])] : [req.userId];
+  race.guests = guests;
+  race.invitedIds = invitedIds.filter((id) => id !== req.userId);
+  meta.race = race;
+  const updated = await prisma.match.update({ where: { id: m.id }, data: { metadata: meta } });
+  // Notifie le host et tous les autres participants
+  for (const id of raceParticipantIds(updated)) {
+    if (id !== req.userId) {
+      broadcaster.send(id, 'match.race.join', { matchId: updated.id, userId: req.userId });
+    }
+  }
   res.json({ ok: true });
 });
 
