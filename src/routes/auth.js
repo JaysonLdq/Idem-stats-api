@@ -13,7 +13,14 @@ const credentials = z.object({
 });
 
 function publicUser(u) {
-  return { id: u.id, pseudo: u.pseudo, avatarUrl: u.avatarUrl ?? null, createdAt: u.createdAt };
+  return {
+    id: u.id,
+    pseudo: u.pseudo,
+    avatarUrl: u.avatarUrl ?? null,
+    createdAt: u.createdAt,
+    coins: u.coins,
+    role: u.role ?? 'user',
+  };
 }
 
 router.post('/register', async (req, res) => {

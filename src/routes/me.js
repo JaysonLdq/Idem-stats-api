@@ -34,7 +34,7 @@ const upload = multer({
 router.get('/', requireAuth, async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
-    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true },
+    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true, role: true },
   });
   if (!user) throw new HttpError(401, 'user_gone', 'unauthorized');
   res.json(user);
@@ -52,7 +52,7 @@ router.patch('/', requireAuth, async (req, res) => {
   // Pas de no-op : si même pseudo, on renvoie tel quel sans toucher la base.
   const current = await prisma.user.findUnique({
     where: { id: req.userId },
-    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true },
+    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true, role: true },
   });
   if (!current) throw new HttpError(401, 'user_gone', 'unauthorized');
   if (current.pseudo === body.pseudo) return res.json(current);
@@ -60,7 +60,7 @@ router.patch('/', requireAuth, async (req, res) => {
     const user = await prisma.user.update({
       where: { id: req.userId },
       data: { pseudo: body.pseudo },
-      select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true },
+      select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true, role: true },
     });
     res.json(user);
   } catch (e) {
@@ -84,7 +84,7 @@ router.post('/avatar', requireAuth, upload.single('file'), async (req, res) => {
   const user = await prisma.user.update({
     where: { id: req.userId },
     data: { avatarUrl },
-    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true },
+    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true, role: true },
   });
   res.json(user);
 });
@@ -100,7 +100,7 @@ router.delete('/avatar', requireAuth, async (req, res) => {
   const user = await prisma.user.update({
     where: { id: req.userId },
     data: { avatarUrl: null },
-    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true },
+    select: { id: true, pseudo: true, avatarUrl: true, createdAt: true, coins: true, role: true },
   });
   res.json(user);
 });
