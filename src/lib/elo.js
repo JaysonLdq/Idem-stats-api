@@ -120,17 +120,19 @@ export function computeGlobalElos(ratings) {
 }
 
 // Tiers de rank — barème custom maison. Ascending order strictly required.
-// Spawn = INITIAL_ELO (1300) → tier Sharknado. Nouvelle convention : les
-// joueurs arrivent "moyens" et peuvent monter ou descendre. L'ancien
-// commentaire parlait de 1000 / Pue sa grand mère — c'était une étape
-// intermédiaire avant le passage à 1300.
+// Paliers RESSERRÉS à 150 pts (au lieu de 150-250) pour qu'on passe d'un
+// rank à l'autre en ~6-10 victoires (avec K=32, ~15-20 ELO/win net).
+// Spawn = INITIAL_ELO (1300) → MILIEU du tier Goat, plus représentatif du
+// "joueur moyen" que Sharknado (le bas du tableau). Quand quelqu'un veut
+// monter d'un rank, c'est désormais accessible en quelques sessions de
+// duels, pas une marathon.
 const TIERS = [
   { min: 0,    name: 'Pue sa grand mère', color: '#8B5A3C', emoji: '💩' },
-  { min: 1100, name: 'Guez Merguez',      color: '#FF8C42', emoji: '🌭' },
-  { min: 1250, name: 'Sharknado',         color: '#38B0FF', emoji: '🦈' },
-  { min: 1450, name: 'Goat',              color: '#F0F0F0', emoji: '🐐' },
-  { min: 1650, name: 'Trigrao',           color: '#B026FF', emoji: '🐅' },
-  { min: 1900, name: 'Canigoat',          color: '#FFD700', emoji: '🏆' },
+  { min: 950,  name: 'Guez Merguez',      color: '#FF8C42', emoji: '🌭' },
+  { min: 1100, name: 'Sharknado',         color: '#38B0FF', emoji: '🦈' },
+  { min: 1250, name: 'Goat',              color: '#F0F0F0', emoji: '🐐' },
+  { min: 1400, name: 'Trigrao',           color: '#B026FF', emoji: '🐅' },
+  { min: 1550, name: 'Canigoat',          color: '#FFD700', emoji: '🏆' },
 ];
 
 /** Retourne { name, color, emoji, min, nextMin } pour un ELO donné. */
