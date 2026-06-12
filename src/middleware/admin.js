@@ -1,21 +1,22 @@
 import { verify } from '../lib/jwt.js';
+import { prisma } from '../db/prisma.js';
 
-// Garde-fou admin. Deux voies d'accès :
+// Garde-fou admin. Trois voies d'accès :
 //   1. Header `x-admin-key` égal à process.env.ADMIN_API_KEY → bypass
 //      complet sans avoir besoin d'un compte. Utile pour les scripts
 //      d'ops ou un reset d'urgence. Désactivé si la variable d'env est
 //      absente côté serveur.
 //   2. JWT Bearer dont le `pseudo` est dans process.env.ADMIN_PSEUDOS
-//      (séparateur virgule). C'est la voie normale depuis l'app web.
+//      (séparateur virgule). Voie historique.
+//   3. JWT Bearer d'un user dont user.role === 'admin' en DB. Permet
+//      de promouvoir des admins sans toucher au .env de prod (set via
+//      la voie clé API uniquement, cf. routes/admin.js).
 //
 // Quand on passe par l'API key, req.isAdminKey = true et req.userId =
 // null. Sinon req.userId et req.pseudo sont posés comme requireAuth.
-//
-// Ce middleware remplace l'enchaînement requireAuth → requireAdmin :
-// un seul tour suffit, et il accepte les deux voies de façon homogène.
 
-export function requireAdmin(req, res, next) {
-  // Voie API key
+export async function requireAdmin(req, res, next) {
+  // 1) Voie API key
   const provided = req.header('x-admin-key');
   const expected = process.env.ADMIN_API_KEY;
   if (provided && expected && safeEq(provided, expected)) {
@@ -25,7 +26,7 @@ export function requireAdmin(req, res, next) {
     return next();
   }
 
-  // Voie JWT
+  // 2/3) Voies JWT — on extrait le token, puis on check pseudo env OU role DB
   const h = req.header('authorization') || '';
   if (!h.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'missing_token' });
@@ -39,13 +40,19 @@ export function requireAdmin(req, res, next) {
   req.userId = payload.sub;
   req.pseudo = payload.pseudo;
 
-  const pseudos = new Set(
+  const envPseudos = new Set(
     (process.env.ADMIN_PSEUDOS || '').split(',').map((s) => s.trim()).filter(Boolean),
   );
-  if (!req.pseudo || !pseudos.has(req.pseudo)) {
-    return res.status(403).json({ error: 'not_admin' });
+  if (req.pseudo && envPseudos.has(req.pseudo)) return next();
+
+  // Sinon, check role DB (1 query par requête admin — c'est rare).
+  if (req.userId) {
+    try {
+      const u = await prisma.user.findUnique({ where: { id: req.userId }, select: { role: true, banned: true } });
+      if (u && !u.banned && u.role === 'admin') return next();
+    } catch { /* tombe en 403 ci-dessous */ }
   }
-  next();
+  return res.status(403).json({ error: 'not_admin' });
 }
 
 function safeEq(a, b) {

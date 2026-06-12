@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { HttpError } from '../middleware/error.js';
 import { emit } from '../lib/sse.js';
+import { computeElos, computeGlobalElos } from '../lib/elo.js';
 
 const router = Router();
 
@@ -154,28 +155,64 @@ router.delete('/tasks/:id/comments/:commentId', requireAdmin, async (req, res) =
 });
 
 // ─ USERS ──────────────────────────────────────────────────────────────
-// GET /admin/users — liste tous les comptes + état banned + coins + nb
-// de matches joués. Trié par création desc (les plus récents d'abord).
-router.get('/users', requireAdmin, async (_req, res) => {
+// GET /admin/users — liste tous les comptes avec filtres optionnels.
+//   ?q=         filtre sur le pseudo (contains, insensible casse)
+//   ?banned=true|false
+//   ?role=admin|user
+// Tri par création desc.
+router.get('/users', requireAdmin, async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const where = {};
+  if (q) where.pseudo = { contains: q, mode: 'insensitive' };
+  if (req.query.banned === 'true') where.banned = true;
+  if (req.query.banned === 'false') where.banned = false;
+  if (req.query.role === 'admin' || req.query.role === 'user') where.role = req.query.role;
+
   const users = await prisma.user.findMany({
+    where,
     select: {
       id: true, pseudo: true, avatarUrl: true, coins: true,
       banned: true, bannedAt: true, banReason: true, createdAt: true,
+      role: true,
       _count: { select: { matchesAsP1: true, matchesAsP2: true } },
     },
     orderBy: { createdAt: 'desc' },
+    take: 200,
   });
-  res.json(users.map((u) => ({
-    id: u.id,
-    pseudo: u.pseudo,
-    avatarUrl: u.avatarUrl,
-    coins: u.coins,
-    banned: u.banned,
-    bannedAt: u.bannedAt,
-    banReason: u.banReason,
-    createdAt: u.createdAt,
-    matchCount: u._count.matchesAsP1 + u._count.matchesAsP2,
-  })));
+  // Pour chaque user on calcule l'ELO par jeu à la volée. Comme cette
+  // route est admin-only et appelée de temps en temps, on accepte
+  // l'overhead du recompute global (parcours unique en O(matches)).
+  const allMatches = await prisma.match.findMany({
+    where: { status: 'finished' },
+    select: { game: true, player1Id: true, player2Id: true, winnerId: true, finishedAt: true, status: true },
+    orderBy: { finishedAt: 'asc' },
+  });
+  const ratings = computeElos(allMatches);
+  const globalElos = computeGlobalElos(ratings);
+
+  res.json(users.map((u) => {
+    const entry = globalElos.get(u.id);
+    const perGame = {};
+    if (entry) {
+      for (const [g, e] of Object.entries(entry.perGame)) {
+        perGame[g] = { rating: e.rating, games: e.games };
+      }
+    }
+    return {
+      id: u.id,
+      pseudo: u.pseudo,
+      avatarUrl: u.avatarUrl,
+      coins: u.coins,
+      banned: u.banned,
+      bannedAt: u.bannedAt,
+      banReason: u.banReason,
+      role: u.role,
+      createdAt: u.createdAt,
+      matchCount: u._count.matchesAsP1 + u._count.matchesAsP2,
+      globalElo: entry?.global ?? null,
+      perGame,
+    };
+  }));
 });
 
 const banBody = z.object({ reason: z.string().trim().max(200).optional() });
@@ -196,36 +233,72 @@ router.post('/users/:id/unban', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /admin/users/:id/reset-elo — supprime TOUS les matches finished
-// du user. L'ELO étant calculé à la volée par computeElos depuis
-// l'historique des matches finished, supprimer ses matches le ramène
-// mécaniquement à INITIAL_ELO. Brutal mais cohérent (et réversible :
-// rien n'est gardé en cache).
+// POST /admin/users/:id/reset-elo[?game=pong] — supprime les matches
+// finished du user. Sans filtre game → reset complet (tous les jeux).
+// Avec game → supprime juste les matches finished de ce jeu pour ce
+// user. L'ELO étant calculé à la volée par computeElos depuis
+// l'historique, suppression = retombe à INITIAL_ELO sur ce périmètre.
 router.post('/users/:id/reset-elo', requireAdmin, async (req, res) => {
   const userId = req.params.id;
+  const game = typeof req.query.game === 'string' ? req.query.game : null;
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
   if (!user) throw new HttpError(404, 'user_not_found', 'not_found');
-  const result = await prisma.match.deleteMany({
-    where: {
-      status: 'finished',
-      OR: [{ player1Id: userId }, { player2Id: userId }],
-    },
-  });
+  const where = {
+    status: 'finished',
+    OR: [{ player1Id: userId }, { player2Id: userId }],
+  };
+  if (game) where.game = game;
+  const result = await prisma.match.deleteMany({ where });
   res.json({ ok: true, deleted: result.count });
 });
 
+// POST /admin/users/:id/role { role } — promeut/rétrograde un user.
+// RÉSERVÉ à la voie clé API : un admin ne peut pas en créer d'autres
+// depuis un compte JWT — il faut la clé de prod pour ça (évite les
+// escalations entre admins). Si l'appelant n'a pas req.isAdminKey,
+// on rejette 403.
+const roleBody = z.object({ role: z.enum(['user', 'admin']) });
+router.post('/users/:id/role', requireAdmin, async (req, res) => {
+  if (!req.isAdminKey) {
+    throw new HttpError(403, 'role_change_requires_api_key', 'forbidden');
+  }
+  const parsed = roleBody.parse(req.body ?? {});
+  await tryOr404(() => prisma.user.update({
+    where: { id: req.params.id },
+    data: { role: parsed.role },
+  }));
+  res.json({ ok: true });
+});
+
 // ─ MATCHES ────────────────────────────────────────────────────────────
-// GET /admin/matches — derniers matches finished/cancelled (50 max),
-// avec joueurs publics. Sert au tableau "supprimer un match".
-router.get('/matches', requireAdmin, async (_req, res) => {
+// GET /admin/matches — derniers matches finished/cancelled avec filtres.
+//   ?q=pseudo (filtre sur P1 ou P2)
+//   ?game=pong
+//   ?status=finished|cancelled (par défaut les deux)
+router.get('/matches', requireAdmin, async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const game = typeof req.query.game === 'string' ? req.query.game : '';
+  const status = req.query.status === 'finished' || req.query.status === 'cancelled'
+    ? [req.query.status]
+    : ['finished', 'cancelled'];
+
+  const where = { status: { in: status } };
+  if (game) where.game = game;
+  if (q) {
+    where.OR = [
+      { player1: { pseudo: { contains: q, mode: 'insensitive' } } },
+      { player2: { pseudo: { contains: q, mode: 'insensitive' } } },
+    ];
+  }
+
   const matches = await prisma.match.findMany({
-    where: { status: { in: ['finished', 'cancelled'] } },
+    where,
     include: {
       player1: { select: PUBLIC_USER_SELECT },
       player2: { select: PUBLIC_USER_SELECT },
     },
     orderBy: { finishedAt: 'desc' },
-    take: 50,
+    take: 100,
   });
   res.json(matches.map((m) => ({
     id: m.id,
@@ -238,6 +311,18 @@ router.get('/matches', requireAdmin, async (_req, res) => {
     player2: m.player2,
     finishedAt: m.finishedAt,
   })));
+});
+
+// GET /admin/stats — petit résumé chiffré pour la bannière du panneau.
+router.get('/stats', requireAdmin, async (_req, res) => {
+  const [usersTotal, usersBanned, usersAdmin, matchesTotal, matchesFinished] = await Promise.all([
+    prisma.user.count(),
+    prisma.user.count({ where: { banned: true } }),
+    prisma.user.count({ where: { role: 'admin' } }),
+    prisma.match.count(),
+    prisma.match.count({ where: { status: 'finished' } }),
+  ]);
+  res.json({ usersTotal, usersBanned, usersAdmin, matchesTotal, matchesFinished });
 });
 
 // DELETE /admin/matches/:id — supprime un match. L'ELO étant calculé à

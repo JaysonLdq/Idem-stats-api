@@ -42,6 +42,11 @@ model User {
   banned       Boolean  @default(false)
   bannedAt     DateTime?
   banReason    String?
+  // Rôle : "user" par défaut, "admin" si promu via la page admin (réservé
+  // à la voie clé API). Les comptes admin DB ont les mêmes droits que les
+  // pseudos listés dans ADMIN_PSEUDOS. Permet de promouvoir sans toucher
+  // au .env de prod.
+  role         String   @default("user")
 
   matchesAsP1 Match[] @relation("MatchP1")
   matchesAsP2 Match[] @relation("MatchP2")
