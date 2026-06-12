@@ -36,6 +36,12 @@ model User {
   // Solde de jetons : gagnés via les 1v1, dépensés au casino (blackjack).
   // 500 par défaut pour avoir de quoi tenter sa chance dès l'inscription.
   coins        Int      @default(500)
+  // Banni par un admin via la page admin. Bloque login + création/jointure
+  // de match. NB : on ne supprime PAS l'historique ; le user reste affiché
+  // dans le classement mais est inopérable.
+  banned       Boolean  @default(false)
+  bannedAt     DateTime?
+  banReason    String?
 
   matchesAsP1 Match[] @relation("MatchP1")
   matchesAsP2 Match[] @relation("MatchP2")

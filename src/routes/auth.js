@@ -32,6 +32,9 @@ router.post('/login', async (req, res) => {
   if (!user) throw new HttpError(401, 'invalid_credentials', 'unauthorized');
   const ok = await bcrypt.compare(body.password, user.passwordHash);
   if (!ok) throw new HttpError(401, 'invalid_credentials', 'unauthorized');
+  // Compte banni → on rejette à la connexion. L'utilisateur voit un
+  // message dédié côté front (cf. humanize() dans LoginPage).
+  if (user.banned) throw new HttpError(403, 'banned', 'forbidden');
   res.json({ token: sign(user), user: publicUser(user) });
 });
 

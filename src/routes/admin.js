@@ -69,7 +69,7 @@ function serializeTask(task) {
 }
 
 // GET /admin/tasks → { admins: User[], tasks: AdminTask[] }
-router.get('/tasks', requireAuth, requireAdmin, async (req, res) => {
+router.get('/tasks', requireAdmin, async (req, res) => {
   const pseudos = getAdminPseudos();
   const [admins, tasks] = await Promise.all([
     prisma.user.findMany({ where: { pseudo: { in: pseudos } }, select: PUBLIC_USER_SELECT }),
@@ -84,7 +84,7 @@ const createTaskBody = z.object({
   assigneeId: z.string().min(1),
 });
 
-router.post('/tasks', requireAuth, requireAdmin, async (req, res) => {
+router.post('/tasks', requireAdmin, async (req, res) => {
   const parsed = createTaskBody.safeParse(req.body);
   if (!parsed.success) throw new HttpError(400, 'invalid_input', 'invalid_input');
   const { title, assigneeId } = parsed.data;
@@ -104,7 +104,7 @@ const updateTaskBody = z.object({
   assigneeId: z.string().min(1).optional(),
 });
 
-router.patch('/tasks/:id', requireAuth, requireAdmin, async (req, res) => {
+router.patch('/tasks/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const parsed = updateTaskBody.safeParse(req.body);
   if (!parsed.success) throw new HttpError(400, 'invalid_input', 'invalid_input');
@@ -118,7 +118,7 @@ router.patch('/tasks/:id', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // DELETE /admin/tasks/:id → { ok: true }
-router.delete('/tasks/:id', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/tasks/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   await tryOr404(() => prisma.adminTask.delete({ where: { id } }));
   await emitToAdmins('admin.task.changed', {});
@@ -130,7 +130,7 @@ const createCommentBody = z.object({
   text: z.string().min(1).max(500),
 });
 
-router.post('/tasks/:id/comments', requireAuth, requireAdmin, async (req, res) => {
+router.post('/tasks/:id/comments', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const parsed = createCommentBody.safeParse(req.body);
   if (!parsed.success) throw new HttpError(400, 'invalid_input', 'invalid_input');
@@ -145,12 +145,109 @@ router.post('/tasks/:id/comments', requireAuth, requireAdmin, async (req, res) =
 });
 
 // DELETE /admin/tasks/:id/comments/:commentId → AdminTask
-router.delete('/tasks/:id/comments/:commentId', requireAuth, requireAdmin, async (req, res) => {
+router.delete('/tasks/:id/comments/:commentId', requireAdmin, async (req, res) => {
   const { id, commentId } = req.params;
   await tryOr404(() => prisma.adminComment.delete({ where: { id: commentId, taskId: id } }));
   const task = await prisma.adminTask.findUnique({ where: { id }, include: TASK_INCLUDE });
   await emitToAdmins('admin.task.changed', {});
   res.json(serializeTask(task));
+});
+
+// ─ USERS ──────────────────────────────────────────────────────────────
+// GET /admin/users — liste tous les comptes + état banned + coins + nb
+// de matches joués. Trié par création desc (les plus récents d'abord).
+router.get('/users', requireAdmin, async (_req, res) => {
+  const users = await prisma.user.findMany({
+    select: {
+      id: true, pseudo: true, avatarUrl: true, coins: true,
+      banned: true, bannedAt: true, banReason: true, createdAt: true,
+      _count: { select: { matchesAsP1: true, matchesAsP2: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json(users.map((u) => ({
+    id: u.id,
+    pseudo: u.pseudo,
+    avatarUrl: u.avatarUrl,
+    coins: u.coins,
+    banned: u.banned,
+    bannedAt: u.bannedAt,
+    banReason: u.banReason,
+    createdAt: u.createdAt,
+    matchCount: u._count.matchesAsP1 + u._count.matchesAsP2,
+  })));
+});
+
+const banBody = z.object({ reason: z.string().trim().max(200).optional() });
+router.post('/users/:id/ban', requireAdmin, async (req, res) => {
+  const parsed = banBody.parse(req.body ?? {});
+  await tryOr404(() => prisma.user.update({
+    where: { id: req.params.id },
+    data: { banned: true, bannedAt: new Date(), banReason: parsed.reason ?? null },
+  }));
+  res.json({ ok: true });
+});
+
+router.post('/users/:id/unban', requireAdmin, async (req, res) => {
+  await tryOr404(() => prisma.user.update({
+    where: { id: req.params.id },
+    data: { banned: false, bannedAt: null, banReason: null },
+  }));
+  res.json({ ok: true });
+});
+
+// POST /admin/users/:id/reset-elo — supprime TOUS les matches finished
+// du user. L'ELO étant calculé à la volée par computeElos depuis
+// l'historique des matches finished, supprimer ses matches le ramène
+// mécaniquement à INITIAL_ELO. Brutal mais cohérent (et réversible :
+// rien n'est gardé en cache).
+router.post('/users/:id/reset-elo', requireAdmin, async (req, res) => {
+  const userId = req.params.id;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!user) throw new HttpError(404, 'user_not_found', 'not_found');
+  const result = await prisma.match.deleteMany({
+    where: {
+      status: 'finished',
+      OR: [{ player1Id: userId }, { player2Id: userId }],
+    },
+  });
+  res.json({ ok: true, deleted: result.count });
+});
+
+// ─ MATCHES ────────────────────────────────────────────────────────────
+// GET /admin/matches — derniers matches finished/cancelled (50 max),
+// avec joueurs publics. Sert au tableau "supprimer un match".
+router.get('/matches', requireAdmin, async (_req, res) => {
+  const matches = await prisma.match.findMany({
+    where: { status: { in: ['finished', 'cancelled'] } },
+    include: {
+      player1: { select: PUBLIC_USER_SELECT },
+      player2: { select: PUBLIC_USER_SELECT },
+    },
+    orderBy: { finishedAt: 'desc' },
+    take: 50,
+  });
+  res.json(matches.map((m) => ({
+    id: m.id,
+    game: m.game,
+    status: m.status,
+    scoreP1: m.scoreP1,
+    scoreP2: m.scoreP2,
+    winnerId: m.winnerId,
+    player1: m.player1,
+    player2: m.player2,
+    finishedAt: m.finishedAt,
+  })));
+});
+
+// DELETE /admin/matches/:id — supprime un match. L'ELO étant calculé à
+// la volée depuis l'historique, ça rembourse mécaniquement l'ELO perdu
+// au perdant et retire celui gagné au gagnant (sans avoir besoin d'un
+// snapshot). Aucune compensation coins (les gains de jetons reposent
+// sur le delta réel à l'historique, donc partent avec le match).
+router.delete('/matches/:id', requireAdmin, async (req, res) => {
+  await tryOr404(() => prisma.match.delete({ where: { id: req.params.id } }));
+  res.json({ ok: true });
 });
 
 export default router;
