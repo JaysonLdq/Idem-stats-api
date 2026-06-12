@@ -78,10 +78,12 @@ router.post('/rooms/heartbeat', requireAuth, async (req, res) => {
 });
 
 // ─ Actions de gameplay ────────────────────────────────────────────────
-const betBody = z.object({ bet: z.number().int().min(1).max(10000) });
+// Cap bet élevé pour ne pas bloquer l'all-in d'un user qui aurait
+// beaucoup de coins. 1M de coins en mise reste assez raisonnable comme
+// borne pour éviter les overflow numériques.
+const betBody = z.object({ bet: z.number().int().min(1).max(1_000_000) });
 router.post('/rooms/bet', requireAuth, async (req, res) => {
   const { bet } = betBody.parse(req.body);
-  // Prélève le bet sur les coins. Si pas assez → 400.
   const u = await prisma.user.findUnique({ where: { id: req.userId }, select: { coins: true } });
   if (!u) throw new HttpError(401, 'user_gone', 'unauthorized');
   if (u.coins < bet) throw new HttpError(400, 'insufficient_coins', 'bad_request');
@@ -89,8 +91,49 @@ router.post('/rooms/bet', requireAuth, async (req, res) => {
   try {
     rooms.placeBet(req.userId, bet);
   } catch (e) {
-    // Rollback du débit en cas d'erreur métier (rare).
     await prisma.user.update({ where: { id: req.userId }, data: { coins: { increment: bet } } });
+    throw new HttpError(400, e.message, 'bad_request');
+  }
+  res.json({ ok: true });
+});
+
+// POST /rooms/start — démarrer la manche (clic "Distribuer").
+router.post('/rooms/start', requireAuth, async (req, res) => {
+  try { rooms.startRound(req.userId); }
+  catch (e) { throw new HttpError(400, e.message, 'bad_request'); }
+  res.json({ ok: true });
+});
+
+// POST /rooms/next — round suivant (clic "Nouveau round" en phase result).
+router.post('/rooms/next', requireAuth, async (req, res) => {
+  try { rooms.next(req.userId); }
+  catch (e) { throw new HttpError(400, e.message, 'bad_request'); }
+  res.json({ ok: true });
+});
+
+// POST /rooms/insurance { bet } — assurance contre BJ dealer. bet = 0
+// signifie skip. Cap = floor(bet_initial / 2) côté lib. Décision finale
+// (passage à playing OU résolution si dealer BJ) gérée après que tous
+// les bettors aient décidé.
+const insBody = z.object({ bet: z.number().int().min(0).max(500_000) });
+router.post('/rooms/insurance', requireAuth, async (req, res) => {
+  const { bet } = insBody.parse(req.body);
+  const userId = req.userId;
+  let charged = 0;
+  try {
+    if (bet > 0) {
+      const u = await prisma.user.findUnique({ where: { id: userId }, select: { coins: true } });
+      if (!u || u.coins < bet) throw new Error('insufficient_coins');
+      await prisma.user.update({ where: { id: userId }, data: { coins: { decrement: bet } } });
+      charged = bet;
+      rooms.insurance(userId, bet);
+    }
+    // Toujours marquer la décision (que ce soit skip ou pose).
+    rooms.decideInsurance(userId);
+  } catch (e) {
+    if (charged > 0) {
+      await prisma.user.update({ where: { id: userId }, data: { coins: { increment: charged } } });
+    }
     throw new HttpError(400, e.message, 'bad_request');
   }
   res.json({ ok: true });
